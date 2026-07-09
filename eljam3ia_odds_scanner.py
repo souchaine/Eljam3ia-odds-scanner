@@ -136,6 +136,17 @@ def filter_events_by_window(events: list[dict], hours: float,
     return kept
 
 
+def get_all_football_events(client: httpx.Client) -> list[dict]:
+    """Every upcoming football match event site-wide, tagged with event["_league"]."""
+    menu = fetch(client, "GetSportMenu", sportId=SPORT_ID, period=0)
+    champ_names = {c["id"]: clean(c["name"]) for c in menu.get("champs", [])}
+    data = fetch(client, "GetEvents", sportId=SPORT_ID)
+    events = data.get("events", [])
+    for event in events:
+        event["_league"] = champ_names.get(event.get("champId")) or f"League {event.get('champId')}"
+    return events
+
+
 def qualifying_selections(details: dict, lo: float, hi: float) -> dict[str, list[str]]:
     """market name -> ["selection @ odd", ...] for odds inside [lo, hi]."""
     odds_by_id = {o["id"]: o for o in details.get("odds", [])}
