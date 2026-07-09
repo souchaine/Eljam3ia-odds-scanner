@@ -35,8 +35,9 @@ from pathlib import Path
 import httpx
 
 from eljam3ia_odds_scanner import (
-    API_BASE, DELAY_S, EPS, HEADERS, SPORT_ID, TARGET_ODD, TOLERANCE, TOP_LEAGUES,
-    clean, fetch, get_events, now_utc, resolve_leagues,
+    API_BASE, DATE_FILTER_HOURS, DELAY_S, EPS, HEADERS, SPORT_ID, TARGET_ODD, TOLERANCE,
+    TOP_LEAGUES, clean, fetch, filter_events_by_window, get_all_football_events,
+    get_events, now_utc, resolve_leagues,
 )
 
 BETSLIP_BASE = "https://sb2betslip-altenar2.biahosted.com/api/Betslip"
@@ -140,24 +141,36 @@ def main() -> int:
     parser.add_argument("--target", type=float, default=TARGET_ODD)
     parser.add_argument("--tolerance", type=float, default=TOLERANCE)
     parser.add_argument("--out", default=OUTPUT_DIR)
+    parser.add_argument("--hours", type=float, default=DATE_FILTER_HOURS,
+                        help="only events kicking off within N hours (0 = all upcoming)")
+    parser.add_argument("--scope", choices=["all", "top"], default="all",
+                        help="'all' = every football league, 'top' = Top Leagues menu section")
     args = parser.parse_args()
 
-    wanted = args.league or TOP_LEAGUES
     lo, hi = args.target - args.tolerance, args.target + args.tolerance
 
     picks: list[dict] = []
     with httpx.Client(headers=POST_HEADERS, timeout=30) as client:
-        found, missing = resolve_leagues(client, wanted)
-        for name in missing:
-            print(f"  ! league not on the menu right now (skipped): {name}")
+        if args.league or args.scope == "top":
+            wanted = args.league or TOP_LEAGUES
+            found, missing = resolve_leagues(client, wanted)
+            for name in missing:
+                print(f"  ! league not on the menu right now (skipped): {name}")
+            order = {name.strip().casefold(): i for i, name in enumerate(wanted)}
+            found.sort(key=lambda lg: order.get(lg["name"].strip().casefold(), 999))
+            league_events = [(clean(lg["name"]),
+                              filter_events_by_window(get_events(client, lg["id"]), args.hours))
+                             for lg in found]
+        else:
+            all_events = filter_events_by_window(get_all_football_events(client), args.hours)
+            by_league: dict[str, list] = {}
+            for event in all_events:
+                by_league.setdefault(event["_league"], []).append(event)
+            league_events = sorted(by_league.items())
 
-        order = {name.strip().casefold(): i for i, name in enumerate(wanted)}
-        found.sort(key=lambda lg: order.get(lg["name"].strip().casefold(), 999))
-
-        for league in found:
-            events = sorted(get_events(client, league["id"]), key=lambda e: e.get("startDate", ""))
+        for league_name, events in league_events:
             usable = 0
-            for event in events:
+            for event in sorted(events, key=lambda e: e.get("startDate", "")):
                 try:
                     details = fetch(client, "GetEventDetails", eventId=event["id"])
                 except RuntimeError:
@@ -165,7 +178,7 @@ def main() -> int:
                 sel = pick_selection(details, lo, hi, args.target)
                 if sel:
                     sel.update({
-                        "league": clean(league["name"]), "event": event,
+                        "league": league_name, "event": event,
                         "match": clean(event.get("name")) or "?", "kickoff": event.get("startDate", ""),
                         "sport": details.get("sport"), "category": details.get("category"),
                         "championship": details.get("champ"), "competitors": details.get("competitors", []),
@@ -173,7 +186,7 @@ def main() -> int:
                     picks.append(sel)
                     usable += 1
                 time.sleep(DELAY_S + random.uniform(0, 0.3))
-            print(f"{clean(league['name'])}: {usable} events with a ~{args.target:g} selection")
+            print(f"{league_name}: {usable} events with a ~{args.target:g} selection")
 
         if not picks:
             print("No qualifying selections found.")
