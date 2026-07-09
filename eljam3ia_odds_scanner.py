@@ -19,7 +19,7 @@ import random
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -42,6 +42,7 @@ TOP_LEAGUES = [
 ]
 DELAY_S = 0.7  # polite delay between event requests (plus jitter)
 OUTPUT_DIR = "output"
+DATE_FILTER_HOURS = 23  # only events kicking off within the next N hours; 0 = all upcoming
 INCLUDE_EMPTY_MARKET_COLUMNS = False  # True = one column per market seen, even if all blank
 
 API_BASE = "https://sb2frontend-1-altenar2.biahosted.com/api/Widget"
@@ -111,6 +112,28 @@ def resolve_leagues(client: httpx.Client, wanted: list[str]) -> tuple[list[dict]
 def get_events(client: httpx.Client, champ_id: int) -> list[dict]:
     data = fetch(client, "GetEvents", champIds=champ_id, sportId=SPORT_ID)
     return data.get("events", [])
+
+
+def parse_utc(iso_str: str) -> datetime:
+    return datetime.strptime(iso_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+def filter_events_by_window(events: list[dict], hours: float,
+                            now: datetime | None = None) -> list[dict]:
+    """Keep events kicking off within [now, now + hours]. Falsy hours keeps everything."""
+    if not hours:
+        return list(events)
+    now = now or datetime.now(timezone.utc)
+    end = now + timedelta(hours=hours)
+    kept = []
+    for event in events:
+        try:
+            start = parse_utc(event.get("startDate") or "")
+        except ValueError:
+            continue
+        if now <= start <= end:
+            kept.append(event)
+    return kept
 
 
 def qualifying_selections(details: dict, lo: float, hi: float) -> dict[str, list[str]]:
