@@ -209,14 +209,28 @@ def main() -> int:
     parser.add_argument("--target", type=float, default=TARGET_ODD)
     parser.add_argument("--tolerance", type=float, default=TOLERANCE)
     parser.add_argument("--out", default=OUTPUT_DIR)
+    parser.add_argument("--hours", type=float, default=DATE_FILTER_HOURS,
+                        help="only events kicking off within N hours (0 = all upcoming)")
+    parser.add_argument("--scope", choices=["all", "top"], default="all",
+                        help="'all' = every football league, 'top' = Top Leagues menu section")
     args = parser.parse_args()
 
-    leagues_wanted = args.league or TOP_LEAGUES
+    if args.league:
+        leagues_requested = "; ".join(args.league)
+    elif args.scope == "top":
+        leagues_requested = "; ".join(TOP_LEAGUES)
+    else:
+        leagues_requested = "all football leagues"
     lo, hi = args.target - args.tolerance, args.target + args.tolerance
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
-    tag = "top_leagues" if args.league is None else "custom"
+    if args.league:
+        tag = "custom"
+    elif args.scope == "all":
+        tag = "today" if args.hours else "all_football"
+    else:
+        tag = "top_leagues"
     matrix_path = out_dir / f"odds_matrix_{tag}_{stamp}.csv"
     meta_path = out_dir / f"odds_matrix_{tag}_{stamp}_meta.csv"
 
@@ -226,14 +240,24 @@ def main() -> int:
     partial_reason = ""
 
     with httpx.Client(headers=HEADERS, timeout=30) as client:
-        found, missing = resolve_leagues(client, leagues_wanted)
-        for name in missing:
-            print(f"  ! league not on the menu right now (skipped): {name}")
-        events_by_league = []
-        for league in found:
-            events = get_events(client, league["id"])
-            events_by_league.append((league, events))
-            print(f"{league['name']}: {len(events)} events")
+        missing: list[str] = []
+        events_by_league: list[tuple[dict, list]] = []
+        if args.league or args.scope == "top":
+            found, missing = resolve_leagues(client, args.league or TOP_LEAGUES)
+            for name in missing:
+                print(f"  ! league not on the menu right now (skipped): {name}")
+            for league in found:
+                events = filter_events_by_window(get_events(client, league["id"]), args.hours)
+                events_by_league.append((league, events))
+                print(f"{league['name']}: {len(events)} events")
+        else:
+            all_events = filter_events_by_window(get_all_football_events(client), args.hours)
+            by_league: dict[str, list] = {}
+            for event in all_events:
+                by_league.setdefault(event["_league"], []).append(event)
+            events_by_league = [({"name": name}, evs) for name, evs in sorted(by_league.items())]
+            window = f"next {args.hours:g}h" if args.hours else "all upcoming"
+            print(f"All football ({window}): {len(all_events)} events in {len(by_league)} leagues")
         total = sum(len(ev) for _, ev in events_by_league)
 
         done = 0
@@ -273,12 +297,14 @@ def main() -> int:
     columns, cell_count = write_matrix(rows, matrix_path)
     write_meta(meta_path, {
         "site": "https://www.eljam3ia.com/betting (Altenar API)",
-        "leagues_requested": "; ".join(leagues_wanted),
+        "leagues_requested": leagues_requested,
         "leagues_scanned": "; ".join(f"{lg['name']} ({len(ev)} events)" for lg, ev in events_by_league),
         "leagues_not_found": "; ".join(missing) or "none",
         "target_odd": args.target,
         "tolerance": args.tolerance,
         "accept_window": f"{lo:g} .. {hi:g}",
+        "date_filter": f"next {args.hours:g} hours" if args.hours else "all upcoming",
+        "scope": "custom leagues" if args.league else args.scope,
         "run_started_utc": started,
         "run_finished_utc": now_utc(),
         "events_scanned": len(rows),
