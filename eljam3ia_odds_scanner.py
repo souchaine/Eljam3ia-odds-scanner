@@ -1,0 +1,264 @@
+"""Eljam3ia odds scanner.
+
+Scans every match in the chosen football leagues on https://www.eljam3ia.com/betting
+(an Altenar sportsbook widget) and collects every selection whose decimal odd falls
+within TARGET_ODD +/- TOLERANCE. Talks directly to the Altenar JSON API - no browser.
+
+Output: a matrix CSV (rows = matches, columns = market names, cells = "selection @ odd"
+entries joined by "; ") plus a _meta.csv sidecar describing the run.
+
+Usage:
+    py eljam3ia_odds_scanner.py                          # all Top Leagues, 1.40 +/- 0.05
+    py eljam3ia_odds_scanner.py --league "World Cup 2026"
+    py eljam3ia_odds_scanner.py --target 2.0 --tolerance 0.1 --out output
+"""
+
+import argparse
+import csv
+import random
+import re
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+import httpx
+
+# ---------------------------------------------------------------- parameters
+TARGET_ODD = 1.40
+TOLERANCE = 0.05  # accept [TARGET_ODD - TOLERANCE, TARGET_ODD + TOLERANCE]
+SPORT_ID = 66  # Football
+TOP_LEAGUES = [
+    "World Cup 2026",
+    "Euro 2028",
+    "UEFA Champions League",
+    "UEFA Europa League",
+    "Premier League",
+    "LaLiga",
+    "Serie A",
+    "Bundesliga",
+    "Ligue 1",
+    "Liga Profesional",
+]
+DELAY_S = 0.7  # polite delay between event requests (plus jitter)
+OUTPUT_DIR = "output"
+INCLUDE_EMPTY_MARKET_COLUMNS = False  # True = one column per market seen, even if all blank
+
+API_BASE = "https://sb2frontend-1-altenar2.biahosted.com/api/Widget"
+COMMON_PARAMS = {
+    "culture": "en-GB",  # keeps market names in English
+    "timezoneOffset": "-60",
+    "integration": "eljam3ia",
+    "deviceType": "1",
+    "numFormat": "en-GB",
+}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Referer": "https://www.eljam3ia.com/",
+    "Accept": "application/json",
+}
+EPS = 1e-9
+
+
+class BlockedError(Exception):
+    """Raised when the API keeps rejecting us (403/429) - triggers a partial save."""
+
+
+def now_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def clean(text: str) -> str:
+    """Collapse any run of whitespace (incl. feed tabs) to a single space and trim."""
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def fetch(client: httpx.Client, endpoint: str, **params) -> dict:
+    """GET an API endpoint with the common query string, retries and backoff."""
+    url = f"{API_BASE}/{endpoint}"
+    last_error = None
+    for attempt in range(3):
+        try:
+            resp = client.get(url, params={**COMMON_PARAMS, **params})
+            if resp.status_code in (403, 429):
+                raise BlockedError(f"{endpoint} -> HTTP {resp.status_code} (rate limited or blocked)")
+            resp.raise_for_status()
+            return resp.json()
+        except BlockedError:
+            raise
+        except (httpx.HTTPError, ValueError) as exc:
+            last_error = exc
+            time.sleep(2 ** (attempt + 1))
+    raise RuntimeError(f"{endpoint} failed after 3 attempts: {last_error}")
+
+
+def resolve_leagues(client: httpx.Client, wanted: list[str]) -> tuple[list[dict], list[str]]:
+    """Match requested league names against the sport menu. Returns (found, missing)."""
+    menu = fetch(client, "GetSportMenu", sportId=SPORT_ID, period=0)
+    champs = {c["name"].strip().casefold(): c for c in menu.get("champs", [])}
+    found, missing = [], []
+    for name in wanted:
+        champ = champs.get(name.strip().casefold())
+        if champ:
+            found.append({"id": champ["id"], "name": champ["name"].strip(),
+                          "eventsCount": champ.get("eventsCount", 0)})
+        else:
+            missing.append(name)
+    return found, missing
+
+
+def get_events(client: httpx.Client, champ_id: int) -> list[dict]:
+    data = fetch(client, "GetEvents", champIds=champ_id, sportId=SPORT_ID)
+    return data.get("events", [])
+
+
+def qualifying_selections(details: dict, lo: float, hi: float) -> dict[str, list[str]]:
+    """market name -> ["selection @ odd", ...] for odds inside [lo, hi]."""
+    odds_by_id = {o["id"]: o for o in details.get("odds", [])}
+    hits: dict[str, list[str]] = {}
+    seen: set[tuple[str, int]] = set()
+    for market in details.get("markets", []) + details.get("childMarkets", []):
+        name = clean(market.get("name"))
+        if not name:
+            continue
+        odd_ids = market.get("desktopOddIds") or market.get("mobileOddIds") or []
+        for group in odd_ids:
+            for odd_id in group if isinstance(group, list) else [group]:
+                odd = odds_by_id.get(odd_id)
+                if odd is None or odd.get("oddStatus", 0) != 0:
+                    continue
+                try:
+                    price = float(odd.get("price"))
+                except (TypeError, ValueError):
+                    continue
+                if lo - EPS <= price <= hi + EPS and (name, odd_id) not in seen:
+                    seen.add((name, odd_id))
+                    hits.setdefault(name, []).append(f"{clean(odd.get('name')) or '?'} @ {price:g}")
+    return hits
+
+
+def write_matrix(rows: list[dict], path: Path) -> tuple[list[str], int]:
+    """Write the matrix CSV. Returns (market columns, qualifying cell count)."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        for market in row["hits"]:
+            counts[market] = counts.get(market, 0) + 1
+        if INCLUDE_EMPTY_MARKET_COLUMNS:
+            for market in row["all_markets"]:
+                counts.setdefault(market, 0)
+    columns = sorted(counts, key=lambda m: (-counts[m], m.casefold()))
+    lead = ["League", "Match", "Kickoff (UTC)", "Event ID", "Scraped At (UTC)"]
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(lead + columns)
+        for row in rows:
+            writer.writerow(
+                [row["league"], row["match"], row["kickoff"], row["event_id"], row["scraped_at"]]
+                + ["; ".join(row["hits"].get(m, [])) for m in columns]
+            )
+    return columns, sum(counts.values())
+
+
+def write_meta(path: Path, info: dict) -> None:
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["key", "value"])
+        for key, value in info.items():
+            writer.writerow([key, value])
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Scan eljam3ia.com odds for selections near a target.")
+    parser.add_argument("--league", action="append",
+                        help="league name (repeatable); default: the site's Top Leagues section")
+    parser.add_argument("--target", type=float, default=TARGET_ODD)
+    parser.add_argument("--tolerance", type=float, default=TOLERANCE)
+    parser.add_argument("--out", default=OUTPUT_DIR)
+    args = parser.parse_args()
+
+    leagues_wanted = args.league or TOP_LEAGUES
+    lo, hi = args.target - args.tolerance, args.target + args.tolerance
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    tag = "top_leagues" if args.league is None else "custom"
+    matrix_path = out_dir / f"odds_matrix_{tag}_{stamp}.csv"
+    meta_path = out_dir / f"odds_matrix_{tag}_{stamp}_meta.csv"
+
+    started = now_utc()
+    rows: list[dict] = []
+    failed: list[str] = []
+    partial_reason = ""
+
+    with httpx.Client(headers=HEADERS, timeout=30) as client:
+        found, missing = resolve_leagues(client, leagues_wanted)
+        for name in missing:
+            print(f"  ! league not on the menu right now (skipped): {name}")
+        events_by_league = []
+        for league in found:
+            events = get_events(client, league["id"])
+            events_by_league.append((league, events))
+            print(f"{league['name']}: {len(events)} events")
+        total = sum(len(ev) for _, ev in events_by_league)
+
+        done = 0
+        try:
+            for league, events in events_by_league:
+                for event in sorted(events, key=lambda e: e.get("startDate", "")):
+                    done += 1
+                    try:
+                        details = fetch(client, "GetEventDetails", eventId=event["id"])
+                        hits = qualifying_selections(details, lo, hi)
+                        match_name = clean(event.get("name")) or "?"
+                        rows.append({
+                            "league": clean(league["name"]),
+                            "match": match_name,
+                            "kickoff": event.get("startDate", ""),
+                            "event_id": event["id"],
+                            "scraped_at": now_utc(),
+                            "hits": hits,
+                            "all_markets": {clean(m.get("name"))
+                                            for m in details.get("markets", [])
+                                            + details.get("childMarkets", [])},
+                        })
+                        n = sum(len(v) for v in hits.values())
+                        print(f"  [{done}/{total}] {match_name} - {n} qualifying")
+                    except RuntimeError as exc:
+                        failed.append(f"{event.get('name', '?')} (id {event['id']}): {exc}")
+                        print(f"  [{done}/{total}] {event.get('name', '?')} - FAILED, continuing")
+                    time.sleep(DELAY_S + random.uniform(0, 0.3))
+        except KeyboardInterrupt:
+            partial_reason = "interrupted by user (Ctrl-C)"
+        except BlockedError as exc:
+            partial_reason = f"stopped: {exc}"
+
+    if partial_reason:
+        print(f"\n! Partial run - {partial_reason}. Saving what was collected.")
+
+    columns, cell_count = write_matrix(rows, matrix_path)
+    write_meta(meta_path, {
+        "site": "https://www.eljam3ia.com/betting (Altenar API)",
+        "leagues_requested": "; ".join(leagues_wanted),
+        "leagues_scanned": "; ".join(f"{lg['name']} ({len(ev)} events)" for lg, ev in events_by_league),
+        "leagues_not_found": "; ".join(missing) or "none",
+        "target_odd": args.target,
+        "tolerance": args.tolerance,
+        "accept_window": f"{lo:g} .. {hi:g}",
+        "run_started_utc": started,
+        "run_finished_utc": now_utc(),
+        "events_scanned": len(rows),
+        "events_failed": len(failed),
+        "failed_events": "; ".join(failed) or "none",
+        "market_columns": len(columns),
+        "qualifying_cells": cell_count,
+        "partial_run": partial_reason or "no",
+    })
+    print(f"\nWrote {matrix_path} ({len(rows)} rows x {len(columns)} market columns, "
+          f"{cell_count} qualifying cells)")
+    print(f"Wrote {meta_path}")
+    return 1 if partial_reason else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
