@@ -78,13 +78,15 @@ def main() -> int:
     parser.add_argument("--target", type=float, default=None)
     parser.add_argument("--tolerance", type=float, default=None)
     parser.add_argument("--skip-betslips", action="store_true", help="matrix only")
+    parser.add_argument("--hours", type=float, default=None, help="kickoff window in hours (forwarded)")
+    parser.add_argument("--scope", choices=["all", "top"], default=None, help="league scope (forwarded)")
     args = parser.parse_args()
 
     run_dir = PROJECT_DIR / "output" / f"run_{datetime.now().strftime('%Y%m%d_%H%M')}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     forward = ["--out", str(run_dir)]
-    for flag in ("target", "tolerance"):
+    for flag in ("target", "tolerance", "hours", "scope"):
         if getattr(args, flag) is not None:
             forward += [f"--{flag}", str(getattr(args, flag))]
 

@@ -18,10 +18,14 @@ fresh booking codes — into a single dated folder `output/run_YYYYMMDD_HHMM/` (
 `betslips_*.txt`, and a `summary.txt` listing every booking code).
 
 ```
-py run_all.py                 # full pipeline, project defaults
-py run_all.py --size 10       # legs per betslip
-py run_all.py --skip-betslips # matrix only
+py run_all.py                         # full pipeline, project defaults
+py run_all.py --size 10               # legs per betslip
+py run_all.py --skip-betslips         # matrix only
+py run_all.py --hours 0 --scope top   # old behavior: Top Leagues, all upcoming dates
 ```
+
+By default every run covers **all football leagues with matches in the next 23 hours**
+(`DATE_FILTER = Only Today (23 h)`); use `--hours`/`--scope` to widen.
 
 Booking codes are always minted fresh at run time because they go stale as matches kick off.
 
