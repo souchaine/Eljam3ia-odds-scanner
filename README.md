@@ -1,7 +1,8 @@
 # Eljam3ia Odds Scanner
 
 Scans football matches on [eljam3ia.com/betting](https://www.eljam3ia.com/betting) and collects
-every betting selection whose decimal odd is near a target (default **1.40 ± 0.05**, i.e. 1.35–1.45).
+every betting selection whose decimal odd falls in the qualifying window (default target range
+**1.30..1.45 ± 0.05**, i.e. window **[1.25, 1.50]**).
 
 The betting page is an **Altenar sportsbook widget**, so the script talks directly to the Altenar
 JSON API (`sb2frontend-1-altenar2.biahosted.com/api/Widget/`) — no browser automation. One GET per
@@ -13,15 +14,20 @@ event returns *all* markets and odds at once.
 
 ## Automatic mode (one command + daily schedule)
 
-`run_all.py` runs the whole chain — scan Top Leagues → odds matrix → 10-leg accumulator betslips →
+`run_all.py` runs the whole chain — scan all leagues → odds matrix → 20-leg accumulator betslips →
 fresh booking codes — into a single dated folder `output/run_YYYYMMDD_HHMM/` (matrix CSV + `_meta`,
 `betslips_*.txt`, and a `summary.txt` listing every booking code).
+
+Qualifying window is **[1.25, 1.50]** (target range `1.30..1.45` ± `0.05`). Betslips are **20-leg
+accumulators, up to 50 per run**; a match may recur across slips, each time with a **different odd**.
 
 ```
 py run_all.py                         # full pipeline, project defaults
 py run_all.py --size 10               # legs per betslip
 py run_all.py --skip-betslips         # matrix only
 py run_all.py --hours 0 --scope top   # old behavior: Top Leagues, all upcoming dates
+py run_all.py --target 1.3..1.45 --size 20 --slips 50   # defaults, shown explicitly
+py run_all.py --target 1.4 --size 10 --slips 7          # old-style single target, 10-leg
 ```
 
 By default every run covers **all football leagues with matches in the next 23 hours**

@@ -75,18 +75,19 @@ def summarize(run_dir: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Full eljam3ia pipeline: matrix + betslips.")
     parser.add_argument("--size", type=int, default=None, help="legs per betslip (default 10)")
-    parser.add_argument("--target", type=float, default=None)
+    parser.add_argument("--target", default=None, help="odd range 'min..max' (forwarded)")
     parser.add_argument("--tolerance", type=float, default=None)
     parser.add_argument("--skip-betslips", action="store_true", help="matrix only")
     parser.add_argument("--hours", type=float, default=None, help="kickoff window in hours (forwarded)")
     parser.add_argument("--scope", choices=["all", "top"], default=None, help="league scope (forwarded)")
+    parser.add_argument("--slips", type=int, default=None, help="max betslips (forwarded)")
     args = parser.parse_args()
 
     run_dir = PROJECT_DIR / "output" / f"run_{datetime.now().strftime('%Y%m%d_%H%M')}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     forward = ["--out", str(run_dir)]
-    for flag in ("target", "tolerance", "hours", "scope"):
+    for flag in ("target", "tolerance", "hours", "scope", "slips"):
         if getattr(args, flag) is not None:
             forward += [f"--{flag}", str(getattr(args, flag))]
 
