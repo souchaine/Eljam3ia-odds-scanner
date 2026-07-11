@@ -80,6 +80,53 @@ def pick_selection(details: dict, lo: float, hi: float, target: float) -> dict |
             "label": clean(best.get("name")) or "?", "market_name": clean(best_market.get("name"))}
 
 
+def collect_selections(details: dict, lo: float, hi: float) -> list[dict]:
+    """Every qualifying odd for one event (price in [lo, hi], active), deduped by odd id."""
+    odds_by_id = {o["id"]: o for o in details.get("odds", [])}
+    out: list[dict] = []
+    seen: set[int] = set()
+    for market in details.get("markets", []) + details.get("childMarkets", []):
+        name = clean(market.get("name"))
+        if not name:
+            continue
+        odd_ids = market.get("desktopOddIds") or market.get("mobileOddIds") or []
+        for group in odd_ids:
+            for odd_id in group if isinstance(group, list) else [group]:
+                odd = odds_by_id.get(odd_id)
+                if odd is None or odd.get("oddStatus", 0) != 0 or odd_id in seen:
+                    continue
+                try:
+                    price = float(odd.get("price"))
+                except (TypeError, ValueError):
+                    continue
+                if lo - EPS <= price <= hi + EPS:
+                    seen.add(odd_id)
+                    out.append({"odd": odd, "market": market, "price": price,
+                                "label": clean(odd.get("name")) or "?", "market_name": name})
+    return out
+
+
+def build_slips(pools: dict[str, list[dict]], size: int, max_slips: int) -> list[list[dict]]:
+    """Greedily form slips of distinct matches, consuming one selection per match per slip.
+
+    A match repeats across slips only by spending a not-yet-used selection (odd). Most-remaining
+    match first spreads usage so more full slips are possible.
+    """
+    remaining = {k: list(v) for k, v in pools.items() if v}
+    slips: list[list[dict]] = []
+    while len(slips) < max_slips:
+        avail = sorted((kv for kv in remaining.items() if kv[1]),
+                       key=lambda kv: len(kv[1]), reverse=True)
+        if len(avail) < 2:
+            break
+        take = avail[:size]
+        slip = [items.pop() for _key, items in take]
+        slips.append(slip)
+        if len(slip) < size:  # could not fill a full slip -> this is the trailing partial
+            break
+    return slips
+
+
 def enrich_odds(client: httpx.Client, picks: list[dict]) -> None:
     """Batch-call GetOddsStates to add intSelectionId/intEventId/isDBB to each pick's odd."""
     payload = [{"oddId": p["odd"]["id"], "price": p["price"],
