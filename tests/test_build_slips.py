@@ -35,6 +35,10 @@ def test_leg_count_never_exceeds_size():
         assert len(slip) <= 2
 
 
+def test_size_zero_returns_no_slips():
+    assert build_slips(pools(), size=0, max_slips=10) == []
+
+
 def test_collect_selections_dedupes_and_filters():
     details = {
         "odds": [

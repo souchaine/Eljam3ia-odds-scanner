@@ -1,14 +1,16 @@
 """Eljam3ia odds scanner.
 
-Scans every match in the chosen football leagues on https://www.eljam3ia.com/betting
-(an Altenar sportsbook widget) and collects every selection whose decimal odd falls
-within TARGET_ODD +/- TOLERANCE. Talks directly to the Altenar JSON API - no browser.
+Scans every match in all football leagues (default --scope all) on https://www.eljam3ia.com/betting
+(an Altenar sportsbook widget), within the today window (kickoff in the next N hours), and
+collects every selection whose decimal odd falls within the target RANGE TARGET_MIN..TARGET_MAX
+(1.30..1.45 by default), widened by +/- TOLERANCE to the accept window [1.25, 1.50].
+Talks directly to the Altenar JSON API - no browser.
 
 Output: a matrix CSV (rows = matches, columns = market names, cells = "selection @ odd"
 entries joined by "; ") plus a _meta.csv sidecar describing the run.
 
 Usage:
-    py eljam3ia_odds_scanner.py                          # all Top Leagues, 1.40 +/- 0.05
+    py eljam3ia_odds_scanner.py                          # all leagues (today window), range 1.30..1.45
     py eljam3ia_odds_scanner.py --league "World Cup 2026"
     py eljam3ia_odds_scanner.py --target 2.0 --tolerance 0.1 --out output
 """
@@ -28,7 +30,7 @@ import httpx
 TARGET_ODD = 1.40  # legacy single-value default (kept for back-compat imports)
 TARGET_MIN = 1.30  # target range low end
 TARGET_MAX = 1.45  # target range high end; window = [TARGET_MIN - TOLERANCE, TARGET_MAX + TOLERANCE]
-TOLERANCE = 0.05  # accept [TARGET_ODD - TOLERANCE, TARGET_ODD + TOLERANCE]
+TOLERANCE = 0.05  # window = [TARGET_MIN - TOLERANCE, TARGET_MAX + TOLERANCE] = [1.25, 1.50]
 SPORT_ID = 66  # Football
 TOP_LEAGUES = [
     "World Cup 2026",
@@ -338,5 +340,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

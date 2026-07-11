@@ -76,7 +76,7 @@ def summarize(run_dir: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Full eljam3ia pipeline: matrix + betslips.")
-    parser.add_argument("--size", type=int, default=None, help="legs per betslip (default 10)")
+    parser.add_argument("--size", type=int, default=None, help="legs per betslip (default 20)")
     parser.add_argument("--target", default=None, help="odd range 'min..max' (forwarded)")
     parser.add_argument("--tolerance", type=float, default=None)
     parser.add_argument("--skip-betslips", action="store_true", help="matrix only")
@@ -89,7 +89,7 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     forward = ["--out", str(run_dir)]
-    for flag in ("target", "tolerance", "hours", "scope", "slips"):
+    for flag in ("target", "tolerance", "hours", "scope"):
         if getattr(args, flag) is not None:
             forward += [f"--{flag}", str(getattr(args, flag))]
 
@@ -102,6 +102,8 @@ def main() -> int:
         slip_args = list(forward)
         if args.size is not None:
             slip_args += ["--size", str(args.size)]
+        if args.slips is not None:
+            slip_args += ["--slips", str(args.slips)]
         run_step("Step 2/2: betslips + booking codes", "make_betslips.py", slip_args)
 
     summary = summarize(run_dir)

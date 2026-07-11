@@ -89,6 +89,8 @@ def build_slips(pools: dict[str, list[dict]], size: int, max_slips: int) -> list
     A match repeats across slips only by spending a not-yet-used selection (odd). Most-remaining
     match first spreads usage so more full slips are possible.
     """
+    if size <= 0:
+        return []
     remaining = {k: list(v) for k, v in pools.items() if v}
     slips: list[list[dict]] = []
     while len(slips) < max_slips:
