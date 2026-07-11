@@ -1,14 +1,16 @@
 """Eljam3ia odds scanner.
 
-Scans every match in the chosen football leagues on https://www.eljam3ia.com/betting
-(an Altenar sportsbook widget) and collects every selection whose decimal odd falls
-within TARGET_ODD +/- TOLERANCE. Talks directly to the Altenar JSON API - no browser.
+Scans every match in all football leagues (default --scope all) on https://www.eljam3ia.com/betting
+(an Altenar sportsbook widget), within the today window (kickoff in the next N hours), and
+collects every selection whose decimal odd falls within the target RANGE TARGET_MIN..TARGET_MAX
+(1.30..1.45 by default), widened by +/- TOLERANCE to the accept window [1.25, 1.50].
+Talks directly to the Altenar JSON API - no browser.
 
 Output: a matrix CSV (rows = matches, columns = market names, cells = "selection @ odd"
 entries joined by "; ") plus a _meta.csv sidecar describing the run.
 
 Usage:
-    py eljam3ia_odds_scanner.py                          # all Top Leagues, 1.40 +/- 0.05
+    py eljam3ia_odds_scanner.py                          # all leagues (today window), range 1.30..1.45
     py eljam3ia_odds_scanner.py --league "World Cup 2026"
     py eljam3ia_odds_scanner.py --target 2.0 --tolerance 0.1 --out output
 """
@@ -25,8 +27,10 @@ from pathlib import Path
 import httpx
 
 # ---------------------------------------------------------------- parameters
-TARGET_ODD = 1.40
-TOLERANCE = 0.05  # accept [TARGET_ODD - TOLERANCE, TARGET_ODD + TOLERANCE]
+TARGET_ODD = 1.40  # legacy single-value default (kept for back-compat imports)
+TARGET_MIN = 1.30  # target range low end
+TARGET_MAX = 1.45  # target range high end; window = [TARGET_MIN - TOLERANCE, TARGET_MAX + TOLERANCE]
+TOLERANCE = 0.05  # window = [TARGET_MIN - TOLERANCE, TARGET_MAX + TOLERANCE] = [1.25, 1.50]
 SPORT_ID = 66  # Football
 TOP_LEAGUES = [
     "World Cup 2026",
@@ -68,6 +72,18 @@ class BlockedError(Exception):
 
 def now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_target(text) -> tuple[float, float]:
+    """'1.3..1.45' -> (1.3, 1.45); a single value -> (v, v). Raises ValueError on bad input."""
+    if isinstance(text, (int, float)):
+        return float(text), float(text)
+    parts = [p for p in str(text).split("..") if p != ""]
+    nums = [float(p) for p in parts]  # ValueError propagates on non-numeric
+    if not nums:
+        raise ValueError(f"empty target: {text!r}")
+    lo, hi = min(nums), max(nums)
+    return lo, hi
 
 
 def clean(text: str) -> str:
@@ -206,7 +222,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Scan eljam3ia.com odds for selections near a target.")
     parser.add_argument("--league", action="append",
                         help="league name (repeatable); default: the site's Top Leagues section")
-    parser.add_argument("--target", type=float, default=TARGET_ODD)
+    parser.add_argument("--target", default=f"{TARGET_MIN}..{TARGET_MAX}",
+                        help="odd range 'min..max' (or a single value)")
     parser.add_argument("--tolerance", type=float, default=TOLERANCE)
     parser.add_argument("--out", default=OUTPUT_DIR)
     parser.add_argument("--hours", type=float, default=DATE_FILTER_HOURS,
@@ -221,7 +238,8 @@ def main() -> int:
         leagues_requested = "; ".join(TOP_LEAGUES)
     else:
         leagues_requested = "all football leagues"
-    lo, hi = args.target - args.tolerance, args.target + args.tolerance
+    tmin, tmax = parse_target(args.target)
+    lo, hi = tmin - args.tolerance, tmax + args.tolerance
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -300,7 +318,7 @@ def main() -> int:
         "leagues_requested": leagues_requested,
         "leagues_scanned": "; ".join(f"{lg['name']} ({len(ev)} events)" for lg, ev in events_by_league),
         "leagues_not_found": "; ".join(missing) or "none",
-        "target_odd": args.target,
+        "target_range": f"{tmin:g}..{tmax:g}",
         "tolerance": args.tolerance,
         "accept_window": f"{lo:g} .. {hi:g}",
         "date_filter": f"next {args.hours:g} hours" if args.hours else "all upcoming",

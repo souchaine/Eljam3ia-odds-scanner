@@ -1,8 +1,8 @@
-"""One-command pipeline: scan Top Leagues -> odds matrix -> 10-leg betslips -> booking codes.
+"""One-command pipeline: scan all football leagues (today window) -> odds matrix -> 20-leg betslips -> booking codes.
 
 Runs the existing scripts in sequence (no logic duplicated here):
   1. eljam3ia_odds_scanner.py  -> odds_matrix_*.csv + _meta.csv
-  2. make_betslips.py          -> betslips_*.txt with one Booking Code per 10-leg slip
+  2. make_betslips.py          -> betslips_*.txt with a Booking Code per 20-leg slip (up to 50 slips)
 
 Each run writes into its own dated folder  output/run_YYYYMMDD_HHMM/  and finishes with a
 summary.txt (and console summary) listing the matrix stats and all booking codes.
@@ -10,9 +10,11 @@ summary.txt (and console summary) listing the matrix stats and all booking codes
 Booking codes go stale as matches kick off, so codes are always minted fresh at run time.
 
 Usage:
-    py run_all.py                    # full pipeline with project defaults
-    py run_all.py --size 10          # forwarded to make_betslips.py
-    py run_all.py --skip-betslips    # matrix only
+    py run_all.py                                 # full pipeline with project defaults
+    py run_all.py --size 20                        # legs per betslip (forwarded)
+    py run_all.py --skip-betslips                  # matrix only
+    py run_all.py --target 1.3..1.45 --slips 50    # forwarded to both scripts
+    py run_all.py --hours 0 --scope top            # widen scope / disable today-window
 
 Scheduled use: run_all.cmd wraps this for Windows Task Scheduler (see README).
 """
@@ -74,12 +76,13 @@ def summarize(run_dir: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Full eljam3ia pipeline: matrix + betslips.")
-    parser.add_argument("--size", type=int, default=None, help="legs per betslip (default 10)")
-    parser.add_argument("--target", type=float, default=None)
+    parser.add_argument("--size", type=int, default=None, help="legs per betslip (default 20)")
+    parser.add_argument("--target", default=None, help="odd range 'min..max' (forwarded)")
     parser.add_argument("--tolerance", type=float, default=None)
     parser.add_argument("--skip-betslips", action="store_true", help="matrix only")
     parser.add_argument("--hours", type=float, default=None, help="kickoff window in hours (forwarded)")
     parser.add_argument("--scope", choices=["all", "top"], default=None, help="league scope (forwarded)")
+    parser.add_argument("--slips", type=int, default=None, help="max betslips (forwarded)")
     args = parser.parse_args()
 
     run_dir = PROJECT_DIR / "output" / f"run_{datetime.now().strftime('%Y%m%d_%H%M')}"
@@ -99,6 +102,8 @@ def main() -> int:
         slip_args = list(forward)
         if args.size is not None:
             slip_args += ["--size", str(args.size)]
+        if args.slips is not None:
+            slip_args += ["--slips", str(args.slips)]
         run_step("Step 2/2: betslips + booking codes", "make_betslips.py", slip_args)
 
     summary = summarize(run_dir)
