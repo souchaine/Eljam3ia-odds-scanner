@@ -53,7 +53,7 @@ before you use them.
 ## Usage (individual scripts)
 
 ```
-py eljam3ia_odds_scanner.py                                # all Top Leagues, 1.40 +/- 0.05
+py eljam3ia_odds_scanner.py                                # all leagues, today window, range 1.30..1.45
 py eljam3ia_odds_scanner.py --league "World Cup 2026"      # one league (repeatable flag)
 py eljam3ia_odds_scanner.py --target 2.0 --tolerance 0.1   # different odds window
 py eljam3ia_odds_scanner.py --out somewhere                # output folder (default: output/)
