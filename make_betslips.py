@@ -1,10 +1,12 @@
 """Build multiplier (accumulator) betslips from eljam3ia and reserve a booking code for each.
 
-For the same Top Leagues the scanner covers, this picks ONE qualifying selection per match
-(the odd closest to TARGET_ODD, within tolerance), then partitions the matches into betslips of
-GROUP_SIZE (default 10). No match is reused within a betslip or across betslips. Each betslip is
-sent to Altenar's reserveBet endpoint, which returns a shareable Booking Code that anyone can load
-on the site via the betslip's "Enter Booking Code" field.
+For the leagues in scope, this collects EVERY qualifying selection per match (price within the
+target range/tolerance) into a pool, then greedily builds up to `--slips` accumulators (default 50)
+of `--size` legs each (default 20). A match is unique WITHIN a slip, but may repeat ACROSS slips -
+each repeat spends a different, not-yet-used qualifying odd for that match, which multiplies the
+number of distinct betslips (and booking codes) that can be produced from the same pool of matches.
+Each betslip is sent to Altenar's reserveBet endpoint, which returns a shareable Booking Code that
+anyone can load on the site via the betslip's "Enter Booking Code" field.
 
 A booking code only saves the selections (like sharing a filled-in slip) - it places no bet and
 moves no money.
@@ -17,8 +19,9 @@ tries to render it ("Oops! This section of the sportsbook didn't load"). This bu
 exact shape the site itself stores when you click odds, so the codes load cleanly.
 
 Usage:
-    py make_betslips.py                     # all Top Leagues, 10 legs per slip
+    py make_betslips.py                     # all leagues, 20 legs per slip, up to 50 slips
     py make_betslips.py --size 10
+    py make_betslips.py --slips 20
     py make_betslips.py --league "World Cup 2026" --league "Serie A"
 
 Odds are live: load a code before its matches kick off, or that leg shows as unavailable.
@@ -192,7 +195,6 @@ def main() -> int:
             league_events = sorted(by_league.items())
 
         pools: dict[str, list[dict]] = {}
-        meta_by_key: dict[str, dict] = {}
         for league_name, events in league_events:
             usable = 0
             for event in sorted(events, key=lambda e: e.get("startDate", "")):
@@ -210,13 +212,14 @@ def main() -> int:
                                   "competitors": details.get("competitors", []),
                                   "match": clean(event.get("name")) or "?", "league": league_name})
                     pools[key] = sels
-                    meta_by_key[key] = {"league": league_name,
-                                        "match": clean(event.get("name")) or "?"}
                     usable += 1
                 time.sleep(DELAY_S + random.uniform(0, 0.3))
             print(f"{league_name}: {usable} events with qualifying selections")
 
         slips = build_slips(pools, args.size, args.slips)
+        if not slips:
+            print("No betslips could be built (no qualifying selections in range).")
+            return 1
         used = [s for slip in slips for s in slip]
         enrich_odds(client, used)  # enrich only the odds actually used
 
