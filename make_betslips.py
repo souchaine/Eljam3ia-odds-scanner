@@ -35,14 +35,15 @@ from pathlib import Path
 import httpx
 
 from eljam3ia_odds_scanner import (
-    API_BASE, DATE_FILTER_HOURS, DELAY_S, EPS, HEADERS, SPORT_ID, TARGET_ODD, TOLERANCE,
-    TOP_LEAGUES, clean, fetch, filter_events_by_window, get_all_football_events,
-    get_events, now_utc, resolve_leagues,
+    API_BASE, DATE_FILTER_HOURS, DELAY_S, EPS, HEADERS, SPORT_ID, TARGET_MAX, TARGET_MIN,
+    TOLERANCE, TOP_LEAGUES, clean, fetch, filter_events_by_window, get_all_football_events,
+    get_events, now_utc, parse_target, resolve_leagues,
 )
 
 BETSLIP_BASE = "https://sb2betslip-altenar2.biahosted.com/api/Betslip"
 COUNTRY_CODE = "TN"
-GROUP_SIZE = 10
+GROUP_SIZE = 20   # legs per betslip
+MAX_SLIPS = 50    # max betslips per run
 OUTPUT_DIR = "output"
 
 # body sent with every POST (reserveBet / GetOddsStates)
@@ -51,33 +52,6 @@ COMMON_BODY = {
     "deviceType": 1, "numFormat": "en-GB", "countryCode": COUNTRY_CODE,
 }
 POST_HEADERS = {**HEADERS, "Content-Type": "application/json", "Origin": "https://www.eljam3ia.com"}
-
-
-def pick_selection(details: dict, lo: float, hi: float, target: float) -> dict | None:
-    """Return {odd, market} for the qualifying odd closest to `target`, or None."""
-    odds_by_id = {o["id"]: o for o in details.get("odds", [])}
-    best, best_market, best_dist = None, None, None
-    for market in details.get("markets", []) + details.get("childMarkets", []):
-        if not clean(market.get("name")):
-            continue
-        odd_ids = market.get("desktopOddIds") or market.get("mobileOddIds") or []
-        for group in odd_ids:
-            for odd_id in group if isinstance(group, list) else [group]:
-                odd = odds_by_id.get(odd_id)
-                if odd is None or odd.get("oddStatus", 0) != 0:
-                    continue
-                try:
-                    price = float(odd.get("price"))
-                except (TypeError, ValueError):
-                    continue
-                if lo - EPS <= price <= hi + EPS:
-                    dist = abs(price - target)
-                    if best_dist is None or dist < best_dist:
-                        best_dist, best, best_market = dist, odd, market
-    if best is None:
-        return None
-    return {"odd": best, "market": best_market, "price": float(best["price"]),
-            "label": clean(best.get("name")) or "?", "market_name": clean(best_market.get("name"))}
 
 
 def collect_selections(details: dict, lo: float, hi: float) -> list[dict]:
@@ -184,8 +158,10 @@ def reserve(client: httpx.Client, picks: list[dict]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build multiplier betslips and reserve booking codes.")
     parser.add_argument("--league", action="append", help="league name (repeatable); default: Top Leagues")
-    parser.add_argument("--size", type=int, default=GROUP_SIZE, help="events per betslip (default 10)")
-    parser.add_argument("--target", type=float, default=TARGET_ODD)
+    parser.add_argument("--size", type=int, default=GROUP_SIZE, help="legs per betslip (default 20)")
+    parser.add_argument("--slips", type=int, default=MAX_SLIPS, help="max betslips per run (default 50)")
+    parser.add_argument("--target", default=f"{TARGET_MIN}..{TARGET_MAX}",
+                        help="odd range 'min..max' (or a single value)")
     parser.add_argument("--tolerance", type=float, default=TOLERANCE)
     parser.add_argument("--out", default=OUTPUT_DIR)
     parser.add_argument("--hours", type=float, default=DATE_FILTER_HOURS,
@@ -194,9 +170,9 @@ def main() -> int:
                         help="'all' = every football league, 'top' = Top Leagues menu section")
     args = parser.parse_args()
 
-    lo, hi = args.target - args.tolerance, args.target + args.tolerance
+    tmin, tmax = parse_target(args.target)
+    lo, hi = tmin - args.tolerance, tmax + args.tolerance
 
-    picks: list[dict] = []
     with httpx.Client(headers=POST_HEADERS, timeout=30) as client:
         if args.league or args.scope == "top":
             wanted = args.league or TOP_LEAGUES
@@ -215,6 +191,8 @@ def main() -> int:
                 by_league.setdefault(event["_league"], []).append(event)
             league_events = sorted(by_league.items())
 
+        pools: dict[str, list[dict]] = {}
+        meta_by_key: dict[str, dict] = {}
         for league_name, events in league_events:
             usable = 0
             for event in sorted(events, key=lambda e: e.get("startDate", "")):
@@ -222,49 +200,50 @@ def main() -> int:
                     details = fetch(client, "GetEventDetails", eventId=event["id"])
                 except RuntimeError:
                     continue
-                sel = pick_selection(details, lo, hi, args.target)
-                if sel:
-                    sel.update({
-                        "league": league_name, "event": event,
-                        "match": clean(event.get("name")) or "?", "kickoff": event.get("startDate", ""),
-                        "sport": details.get("sport"), "category": details.get("category"),
-                        "championship": details.get("champ"), "competitors": details.get("competitors", []),
-                    })
-                    picks.append(sel)
+                sels = collect_selections(details, lo, hi)
+                if sels:
+                    key = f"{event['id']}"
+                    for s in sels:
+                        s.update({"event": event, "sport": details.get("sport"),
+                                  "category": details.get("category"),
+                                  "championship": details.get("champ"),
+                                  "competitors": details.get("competitors", []),
+                                  "match": clean(event.get("name")) or "?", "league": league_name})
+                    pools[key] = sels
+                    meta_by_key[key] = {"league": league_name,
+                                        "match": clean(event.get("name")) or "?"}
                     usable += 1
                 time.sleep(DELAY_S + random.uniform(0, 0.3))
-            print(f"{league_name}: {usable} events with a ~{args.target:g} selection")
+            print(f"{league_name}: {usable} events with qualifying selections")
 
-        if not picks:
-            print("No qualifying selections found.")
-            return 1
+        slips = build_slips(pools, args.size, args.slips)
+        used = [s for slip in slips for s in slip]
+        enrich_odds(client, used)  # enrich only the odds actually used
 
-        enrich_odds(client, picks)  # add intSelectionId/intEventId
-
-        groups = [picks[i:i + args.size] for i in range(0, len(picks), args.size)]
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
         txt_path = out_dir / f"betslips_{stamp}.txt"
         lines = [f"Eljam3ia multiplier betslips - built {now_utc()}",
-                 f"target {args.target:g} (window {lo:g}..{hi:g}), {args.size} legs per slip, "
-                 f"{len(picks)} events over {len(groups)} betslips",
-                 "Load a code on eljam3ia.com: betslip panel -> Enter Booking Code. Do it before kickoff.", ""]
+                 f"window {lo:g}..{hi:g}, {args.size} legs/slip, up to {args.slips} slips, "
+                 f"{len(pools)} matches -> {len(slips)} betslips (matches may repeat across slips "
+                 f"with different odds)",
+                 "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code (before kickoff).", ""]
 
-        for gi, group in enumerate(groups, 1):
+        for gi, slip in enumerate(slips, 1):
             combined = 1.0
-            for s in group:
+            for s in slip:
                 combined *= s["price"]
-            header = (f"BETSLIP {gi}  ({len(group)} legs, combined odds x{combined:.2f})"
-                      + ("  [partial - fewer than requested]" if len(group) < args.size else ""))
+            header = (f"BETSLIP {gi}  ({len(slip)} legs, combined odds x{combined:.2f})"
+                      + ("  [partial - fewer than requested]" if len(slip) < args.size else ""))
             print(f"\n{header}")
             lines.append(header)
-            for li, s in enumerate(group, 1):
+            for li, s in enumerate(slip, 1):
                 leg = f"  {li:2}. {s['league']} - {s['match']} - {s['market_name']}: {s['label']} @ {s['price']:g}"
                 print(leg)
                 lines.append(leg)
             try:
-                code = reserve(client, group)
+                code = reserve(client, slip)
                 msg = f"  >> BOOKING CODE: {code}"
             except (httpx.HTTPError, RuntimeError, KeyError) as exc:
                 msg = f"  >> reserve failed: {exc}"
