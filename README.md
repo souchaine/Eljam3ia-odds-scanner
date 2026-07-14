@@ -30,11 +30,19 @@ py run_all.py --target 1.3..1.45 --size 20 --slips 50   # defaults, shown explic
 py run_all.py --target 1.4 --size 10 --slips 7          # old-style single target, 10-leg
 py run_all.py --per-category            # 7 category-pure families, up to 25 slips each
 py make_betslips.py --per-category      # same, betslips only
+py run_all.py --set a                   # SET A only
+py run_all.py --set b --slips-b 10      # SET B only, capped at 10 slips
+py run_all.py --slips-a 30 --slips-b 15 # both sets, custom sizes
 ```
 
 With `--per-category`, betslips are grouped into 7 market families (main, combo DC, 1st half,
 2nd half, corners, carte/cards, multigoals) — up to 25 twenty-leg slips per family, each leg from
 that family.
+
+Each run builds **two sets**: SET A = up to 50 all-odds 20-leg slips; SET B = up to 25 slips
+diversified across the 7 market families. Every slip shows a de-vigged **win%** (model
+probability; for 20-leg accumulators this is inherently tiny). Restrict with `--set a|b`; sizes
+via `--slips-a`/`--slips-b`.
 
 By default every run covers **all football leagues with matches in the next 23 hours**
 (`DATE_FILTER = Only Today (23 h)`); use `--hours`/`--scope` to widen.

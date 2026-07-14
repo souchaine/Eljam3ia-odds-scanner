@@ -85,6 +85,9 @@ def main() -> int:
     parser.add_argument("--slips", type=int, default=None, help="max betslips (forwarded)")
     parser.add_argument("--per-category", action="store_true",
                         help="build category-pure betslips (forwarded)")
+    parser.add_argument("--set", choices=["both", "a", "b"], default=None, help="set(s) to build (forwarded)")
+    parser.add_argument("--slips-a", type=int, default=None, help="max SET A slips (forwarded)")
+    parser.add_argument("--slips-b", type=int, default=None, help="max SET B slips (forwarded)")
     args = parser.parse_args()
 
     run_dir = PROJECT_DIR / "output" / f"run_{datetime.now().strftime('%Y%m%d_%H%M')}"
@@ -106,6 +109,9 @@ def main() -> int:
             slip_args += ["--size", str(args.size)]
         if args.slips is not None:
             slip_args += ["--slips", str(args.slips)]
+        for f, v in (("--set", args.set), ("--slips-a", args.slips_a), ("--slips-b", args.slips_b)):
+            if v is not None:
+                slip_args += [f, str(v)]
         if args.per_category:
             slip_args.append("--per-category")
         run_step("Step 2/2: betslips + booking codes", "make_betslips.py", slip_args)
