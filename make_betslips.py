@@ -185,7 +185,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build multiplier betslips and reserve booking codes.")
     parser.add_argument("--league", action="append", help="league name (repeatable); default: Top Leagues")
     parser.add_argument("--size", type=int, default=GROUP_SIZE, help="legs per betslip (default 20)")
-    parser.add_argument("--slips", type=int, default=MAX_SLIPS, help="max betslips per run (default 50)")
+    parser.add_argument("--slips", type=int, default=None,
+                        help="max betslips per run (mixed) or per category (--per-category)")
+    parser.add_argument("--per-category", action="store_true",
+                        help="build category-pure slips (main/combo DC/1st half/2nd half/corners/carte/multigoals)")
     parser.add_argument("--target", default=f"{TARGET_MIN}..{TARGET_MAX}",
                         help="odd range 'min..max' (or a single value)")
     parser.add_argument("--tolerance", type=float, default=TOLERANCE)
@@ -198,6 +201,9 @@ def main() -> int:
 
     tmin, tmax = parse_target(args.target)
     lo, hi = tmin - args.tolerance, tmax + args.tolerance
+
+    default_slips = PER_CATEGORY_SLIPS if args.per_category else MAX_SLIPS
+    max_slips = args.slips if args.slips is not None else default_slips
 
     with httpx.Client(headers=POST_HEADERS, timeout=30) as client:
         if args.league or args.scope == "top":
@@ -239,28 +245,51 @@ def main() -> int:
                 time.sleep(DELAY_S + random.uniform(0, 0.3))
             print(f"{league_name}: {usable} events with qualifying selections")
 
-        slips = build_slips(pools, args.size, args.slips)
-        if not slips:
+        if args.per_category:
+            groups: list[tuple[str, list[dict]]] = []
+            for cat in CATEGORY_ORDER:
+                cat_pools = {
+                    key: [s for s in sels if market_category(s["market_name"]) == cat]
+                    for key, sels in pools.items()
+                }
+                cat_pools = {k: v for k, v in cat_pools.items() if v}
+                for i, slip in enumerate(build_slips(cat_pools, args.size, max_slips), 1):
+                    groups.append((f"{cat} #{i}", slip))
+        else:
+            groups = [(str(i), slip)
+                      for i, slip in enumerate(build_slips(pools, args.size, max_slips), 1)]
+
+        if not groups:
             print("No betslips could be built (no qualifying selections in range).")
             return 1
-        used = [s for slip in slips for s in slip]
-        enrich_odds(client, used)  # enrich only the odds actually used
+
+        used = [s for _label, slip in groups for s in slip]
+        enrich_odds(client, used)
 
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
         txt_path = out_dir / f"betslips_{stamp}.txt"
+        mode = (f"per-category ({len(CATEGORY_ORDER)} families), up to {max_slips} slips/category"
+                if args.per_category else
+                f"{args.size} legs/slip, up to {max_slips} slips")
         lines = [f"Eljam3ia multiplier betslips - built {now_utc()}",
-                 f"window {lo:g}..{hi:g}, {args.size} legs/slip, up to {args.slips} slips, "
-                 f"{len(pools)} matches -> {len(slips)} betslips (matches may repeat across slips "
-                 f"with different odds)",
+                 f"window {lo:g}..{hi:g}, {args.size} legs/slip, {mode}, {len(pools)} matches",
                  "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code (before kickoff).", ""]
 
-        for gi, slip in enumerate(slips, 1):
+        current_cat = None
+        for gi, (label, slip) in enumerate(groups, 1):
+            if args.per_category:
+                cat = label.rsplit(" #", 1)[0]
+                if cat != current_cat:
+                    current_cat = cat
+                    header_line = f"\n===== CATEGORY: {cat} ====="
+                    print(header_line)
+                    lines.append(header_line)
             combined = 1.0
             for s in slip:
                 combined *= s["price"]
-            header = (f"BETSLIP {gi}  ({len(slip)} legs, combined odds x{combined:.2f})"
+            header = (f"BETSLIP {label}  ({len(slip)} legs, combined odds x{combined:.2f})"
                       + ("  [partial - fewer than requested]" if len(slip) < args.size else ""))
             print(f"\n{header}")
             lines.append(header)
