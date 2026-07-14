@@ -49,6 +49,9 @@ GROUP_SIZE = 20   # legs per betslip
 MAX_SLIPS = 50    # max betslips per run
 OUTPUT_DIR = "output"
 
+CATEGORY_ORDER = ["main", "combo DC", "1st half", "2nd half", "corners", "carte", "multigoals"]
+PER_CATEGORY_SLIPS = 25  # default slips per category in --per-category mode
+
 # body sent with every POST (reserveBet / GetOddsStates)
 COMMON_BODY = {
     "culture": "en-GB", "timezoneOffset": -60, "integration": "eljam3ia",
@@ -81,6 +84,24 @@ def collect_selections(details: dict, lo: float, hi: float) -> list[dict]:
                     out.append({"odd": odd, "market": market, "price": price,
                                 "label": clean(odd.get("name")) or "?", "market_name": name})
     return out
+
+
+def market_category(name: str) -> str:
+    """Classify a market name into one of the 7 families (specific stat types win)."""
+    n = (name or "").lower()
+    if "corner" in n:
+        return "corners"
+    if "booking" in n or "card" in n:
+        return "carte"
+    if "multigoal" in n:
+        return "multigoals"
+    if "1st half" in n or "first half" in n:
+        return "1st half"
+    if "2nd half" in n or "second half" in n:
+        return "2nd half"
+    if "double chance" in n or "dc " in n or "/dc" in n or "dc/" in n:
+        return "combo DC"
+    return "main"
 
 
 def build_slips(pools: dict[str, list[dict]], size: int, max_slips: int) -> list[list[dict]]:
