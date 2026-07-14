@@ -5,6 +5,10 @@ def test_corners_wins_over_first_half():
     assert market_category("1st half - total corners") == "corners"
 
 
+def test_carte_wins_over_first_half():
+    assert market_category("1st half - total bookings") == "carte"
+
+
 def test_carte_matches_bookings_and_cards():
     assert market_category("Total bookings") == "carte"
     assert market_category("Both teams 3+ bookings each") == "carte"

@@ -59,7 +59,7 @@ def summarize(run_dir: Path) -> str:
     if slips:
         text = slips[-1].read_text(encoding="utf-8")
         codes = re.findall(r">> BOOKING CODE: (\S+)", text)
-        headers = re.findall(r"^(BETSLIP \d+.*)$", text, re.M)
+        headers = re.findall(r"^(BETSLIP \S+.*)$", text, re.M)
         lines.append(f"BETSLIPS ({slips[-1].name})")
         for header, code in zip(headers, codes):
             lines.append(f"  {code}  <-  {header}")

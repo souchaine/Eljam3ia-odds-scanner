@@ -272,13 +272,13 @@ def main() -> int:
         txt_path = out_dir / f"betslips_{stamp}.txt"
         mode = (f"per-category ({len(CATEGORY_ORDER)} families), up to {max_slips} slips/category"
                 if args.per_category else
-                f"{args.size} legs/slip, up to {max_slips} slips")
+                f"up to {max_slips} slips")
         lines = [f"Eljam3ia multiplier betslips - built {now_utc()}",
-                 f"window {lo:g}..{hi:g}, {args.size} legs/slip, {mode}, {len(pools)} matches",
+                 f"window {lo:g}..{hi:g}, {args.size} legs/slip, {mode}, {len(pools)} matches -> {len(groups)} betslips",
                  "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code (before kickoff).", ""]
 
         current_cat = None
-        for gi, (label, slip) in enumerate(groups, 1):
+        for label, slip in groups:
             if args.per_category:
                 cat = label.rsplit(" #", 1)[0]
                 if cat != current_cat:
