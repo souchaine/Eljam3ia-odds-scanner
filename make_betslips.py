@@ -47,6 +47,7 @@ BETSLIP_BASE = "https://sb2betslip-altenar2.biahosted.com/api/Betslip"
 COUNTRY_CODE = "TN"
 GROUP_SIZE = 20   # legs per betslip
 MAX_SLIPS = 50    # max betslips per run
+SLIPS_B = 25      # max slips for the diversified (soft round-robin) builder
 OUTPUT_DIR = "output"
 
 CATEGORY_ORDER = ["main", "combo DC", "1st half", "2nd half", "corners", "carte", "multigoals"]
@@ -157,6 +158,53 @@ def build_slips(pools: dict[str, list[dict]], size: int, max_slips: int) -> list
         slip = [items.pop() for _key, items in take]
         slips.append(slip)
         if len(slip) < size:  # could not fill a full slip -> this is the trailing partial
+            break
+    return slips
+
+
+def build_diversified_slips(pools: dict[str, list[dict]], size: int,
+                            max_slips: int) -> list[list[dict]]:
+    """Greedy family round-robin: each slip spreads legs across CATEGORY_ORDER, best-effort.
+
+    Distinct match per slip; each selection (odd) consumed once overall; at most one trailing
+    partial. Thin families contribute what they have; remaining legs fill from any family.
+    """
+    if size <= 0:
+        return []
+    # per-category -> match_key -> list of selections (copies so we can pop without touching caller)
+    by_cat: dict[str, dict[str, list[dict]]] = {c: {} for c in CATEGORY_ORDER}
+    for key, sels in pools.items():
+        for s in sels:
+            cat = market_category(s["market_name"])
+            by_cat.setdefault(cat, {}).setdefault(key, []).append(s)
+
+    def remaining_matches() -> set:
+        return {k for cat in by_cat.values() for k, v in cat.items() if v}
+
+    slips: list[list[dict]] = []
+    while len(slips) < max_slips:
+        if len(remaining_matches()) < 2:
+            break
+        slip: list[dict] = []
+        used_matches: set = set()
+        progressed = True
+        while len(slip) < size and progressed:
+            progressed = False
+            for cat in CATEGORY_ORDER:
+                if len(slip) >= size:
+                    break
+                # eligible matches in this family: have stock and not already in this slip
+                candidates = [(k, v) for k, v in by_cat.get(cat, {}).items() if v and k not in used_matches]
+                if not candidates:
+                    continue
+                k, v = max(candidates, key=lambda kv: len(kv[1]))
+                slip.append(v.pop())
+                used_matches.add(k)
+                progressed = True
+        if not slip:
+            break
+        slips.append(slip)
+        if len(slip) < size:  # could not fill -> trailing partial
             break
     return slips
 
