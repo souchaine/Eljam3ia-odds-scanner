@@ -32,6 +32,5 @@ def test_summarize_lists_dual_set_codes(tmp_path):
         "===== SET B: 7-category diversified =====\n"
         "BETSLIP B1  (20 legs, combined odds x700.00, win% 0.03)\n  >> BOOKING CODE: BB222\n\n",
         encoding="utf-8")
-    import run_all
     out = run_all.summarize(tmp_path)
     assert "AA111" in out and "BB222" in out

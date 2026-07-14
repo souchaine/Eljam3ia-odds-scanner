@@ -2,7 +2,8 @@
 
 Runs the existing scripts in sequence (no logic duplicated here):
   1. eljam3ia_odds_scanner.py  -> odds_matrix_*.csv + _meta.csv
-  2. make_betslips.py          -> betslips_*.txt with a Booking Code per 20-leg slip (up to 50 slips)
+  2. make_betslips.py          -> betslips_*.txt: two sets per run (SET A up to 50 all-odds +
+                                  SET B up to 25 diversified), each 20-leg slip with a Booking Code + win%
 
 Each run writes into its own dated folder  output/run_YYYYMMDD_HHMM/  and finishes with a
 summary.txt (and console summary) listing the matrix stats and all booking codes.
@@ -10,10 +11,10 @@ summary.txt (and console summary) listing the matrix stats and all booking codes
 Booking codes go stale as matches kick off, so codes are always minted fresh at run time.
 
 Usage:
-    py run_all.py                                 # full pipeline with project defaults
+    py run_all.py                                 # full pipeline, both sets (SET A 50 + SET B 25)
     py run_all.py --size 20                        # legs per betslip (forwarded)
     py run_all.py --skip-betslips                  # matrix only
-    py run_all.py --target 1.3..1.45 --slips 50    # forwarded to both scripts
+    py run_all.py --set b --slips-b 15             # SET B only, capped at 15 slips
     py run_all.py --hours 0 --scope top            # widen scope / disable today-window
 
 Scheduled use: run_all.cmd wraps this for Windows Task Scheduler (see README).
