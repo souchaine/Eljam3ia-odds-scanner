@@ -1,8 +1,10 @@
 """Build multiplier (accumulator) betslips from eljam3ia and reserve a booking code for each.
 
 For the leagues in scope, this collects EVERY qualifying selection per match (price within the
-target range/tolerance) into a pool, then greedily builds up to `--slips` accumulators (default 50)
-of `--size` legs each (default 20). A match is unique WITHIN a slip, but may repeat ACROSS slips -
+target range/tolerance) into a pool, then greedily builds two sets per run: SET A (up to
+`--slips-a`, default 50, all-odds) and SET B (up to `--slips-b`, default 25, diversified across
+7 market families) of `--size` legs each (default 20). A match is unique WITHIN a slip, but may
+repeat ACROSS slips -
 each repeat spends a different, not-yet-used qualifying odd for that match, which multiplies the
 number of distinct betslips (and booking codes) that can be produced from the same pool of matches.
 Each betslip is sent to Altenar's reserveBet endpoint, which returns a shareable Booking Code that
@@ -51,7 +53,6 @@ SLIPS_B = 25      # max slips for the diversified (soft round-robin) builder
 OUTPUT_DIR = "output"
 
 CATEGORY_ORDER = ["main", "combo DC", "1st half", "2nd half", "corners", "carte", "multigoals"]
-PER_CATEGORY_SLIPS = 25  # default slips per category in --per-category mode
 
 # body sent with every POST (reserveBet / GetOddsStates)
 COMMON_BODY = {
@@ -113,20 +114,24 @@ def market_category(name: str) -> str:
 
 
 def novig_prob(price: float, market_prices: list[float]) -> float:
-    """No-vig implied probability of one outcome, normalized over its market's active outcomes."""
+    """No-vig implied probability of one outcome, normalized over its market's active outcomes.
+
+    A market with fewer than 2 valid outcomes cannot be de-vigged (no counterpart to strip the
+    margin against), so fall back to the raw implied probability 1/price rather than a misleading 1.0.
+    """
     try:
         raw = 1.0 / float(price)
     except (TypeError, ValueError, ZeroDivisionError):
         return 0.0
-    total = 0.0
+    inv = []
     for p in market_prices:
         try:
             fp = float(p)
         except (TypeError, ValueError):
             continue
         if fp:
-            total += 1.0 / fp
-    return raw / total if total > 0 else raw
+            inv.append(1.0 / fp)
+    return raw / sum(inv) if len(inv) >= 2 else raw
 
 
 def slip_win_pct(slip: list[dict]) -> float:

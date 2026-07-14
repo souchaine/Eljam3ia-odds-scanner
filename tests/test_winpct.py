@@ -19,6 +19,11 @@ def test_novig_skips_zero_prices():
     assert abs(novig_prob(2.0, [2.0, 2.0, 0.0]) - 0.5) < 1e-9
 
 
+def test_novig_single_outcome_market_uses_raw_not_one():
+    # a market with only one active outcome cannot be de-vigged -> raw 1/price, not 1.0
+    assert abs(novig_prob(1.35, [1.35]) - (1.0 / 1.35)) < 1e-9
+
+
 def test_slip_win_pct_is_product_times_100():
     slip = [{"novig_prob": 0.5}, {"novig_prob": 0.5}]
     assert abs(slip_win_pct(slip) - 25.0) < 1e-9
