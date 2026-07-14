@@ -83,6 +83,8 @@ def main() -> int:
     parser.add_argument("--hours", type=float, default=None, help="kickoff window in hours (forwarded)")
     parser.add_argument("--scope", choices=["all", "top"], default=None, help="league scope (forwarded)")
     parser.add_argument("--slips", type=int, default=None, help="max betslips (forwarded)")
+    parser.add_argument("--per-category", action="store_true",
+                        help="build category-pure betslips (forwarded)")
     args = parser.parse_args()
 
     run_dir = PROJECT_DIR / "output" / f"run_{datetime.now().strftime('%Y%m%d_%H%M')}"
@@ -104,6 +106,8 @@ def main() -> int:
             slip_args += ["--size", str(args.size)]
         if args.slips is not None:
             slip_args += ["--slips", str(args.slips)]
+        if args.per_category:
+            slip_args.append("--per-category")
         run_step("Step 2/2: betslips + booking codes", "make_betslips.py", slip_args)
 
     summary = summarize(run_dir)

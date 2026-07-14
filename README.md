@@ -28,7 +28,13 @@ py run_all.py --skip-betslips         # matrix only
 py run_all.py --hours 0 --scope top   # old behavior: Top Leagues, all upcoming dates
 py run_all.py --target 1.3..1.45 --size 20 --slips 50   # defaults, shown explicitly
 py run_all.py --target 1.4 --size 10 --slips 7          # old-style single target, 10-leg
+py run_all.py --per-category            # 7 category-pure families, up to 25 slips each
+py make_betslips.py --per-category      # same, betslips only
 ```
+
+With `--per-category`, betslips are grouped into 7 market families (main, combo DC, 1st half,
+2nd half, corners, carte/cards, multigoals) — up to 25 twenty-leg slips per family, each leg from
+that family.
 
 By default every run covers **all football leagues with matches in the next 23 hours**
 (`DATE_FILTER = Only Today (23 h)`); use `--hours`/`--scope` to widen.
