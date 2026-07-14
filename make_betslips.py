@@ -81,8 +81,15 @@ def collect_selections(details: dict, lo: float, hi: float) -> list[dict]:
                     continue
                 if lo - EPS <= price <= hi + EPS:
                     seen.add(odd_id)
+                    market_prices = [
+                        odds_by_id[i]["price"]
+                        for grp in (market.get("desktopOddIds") or market.get("mobileOddIds") or [])
+                        for i in (grp if isinstance(grp, list) else [grp])
+                        if i in odds_by_id and odds_by_id[i].get("oddStatus", 0) == 0
+                    ]
                     out.append({"odd": odd, "market": market, "price": price,
-                                "label": clean(odd.get("name")) or "?", "market_name": name})
+                                "label": clean(odd.get("name")) or "?", "market_name": name,
+                                "novig_prob": novig_prob(price, market_prices)})
     return out
 
 
@@ -103,6 +110,26 @@ def market_category(name: str) -> str:
         return "combo DC"
     return "main"
 
+
+
+def novig_prob(price: float, market_prices: list[float]) -> float:
+    """No-vig implied probability of one outcome, normalized over its market's active outcomes."""
+    try:
+        raw = 1.0 / float(price)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+    total = sum(1.0 / p for p in market_prices if p)
+    return raw / total if total > 0 else raw
+
+
+def slip_win_pct(slip: list[dict]) -> float:
+    """Model win probability of a slip as a percent: 100 * product of legs' no-vig probs."""
+    if not slip:
+        return 0.0
+    prob = 1.0
+    for s in slip:
+        prob *= s.get("novig_prob", 0.0)
+    return 100.0 * prob
 
 def build_slips(pools: dict[str, list[dict]], size: int, max_slips: int) -> list[list[dict]]:
     """Greedily form slips of distinct matches, consuming one selection per match per slip.
@@ -314,3 +341,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
