@@ -34,6 +34,7 @@ import json
 import random
 import sys
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -85,7 +86,7 @@ def collect_selections(details: dict, lo: float, hi: float) -> list[dict]:
                     seen.add(odd_id)
                     market_prices = [
                         odds_by_id[i].get("price")
-                        for grp in (market.get("desktopOddIds") or market.get("mobileOddIds") or [])
+                        for grp in odd_ids
                         for i in (grp if isinstance(grp, list) else [grp])
                         if i in odds_by_id and odds_by_id[i].get("oddStatus", 0) == 0
                     ]
@@ -274,8 +275,10 @@ def main() -> int:
     parser.add_argument("--size", type=int, default=GROUP_SIZE, help="legs per betslip (default 20)")
     parser.add_argument("--set", choices=["both", "a", "b"], default="both",
                         help="which set(s) to build: a=all-odds, b=7-category diversified")
-    parser.add_argument("--slips-a", type=int, default=MAX_SLIPS, help="max SET A slips (default 50)")
-    parser.add_argument("--slips-b", type=int, default=SLIPS_B, help="max SET B slips (default 25)")
+    parser.add_argument("--slips-a", type=int, default=None, help="max SET A slips (default 50)")
+    parser.add_argument("--slips-b", type=int, default=None, help="max SET B slips (default 25)")
+    parser.add_argument("--slips", type=int, default=None,
+                        help="cap BOTH sets at once (alias; --slips-a/--slips-b take precedence)")
     parser.add_argument("--per-category", action="store_true",
                         help="(legacy) build category-pure slips instead of the two sets")
     parser.add_argument("--target", default=f"{TARGET_MIN}..{TARGET_MAX}",
@@ -290,6 +293,8 @@ def main() -> int:
 
     tmin, tmax = parse_target(args.target)
     lo, hi = tmin - args.tolerance, tmax + args.tolerance
+    slips_a = args.slips_a if args.slips_a is not None else (args.slips if args.slips is not None else MAX_SLIPS)
+    slips_b = args.slips_b if args.slips_b is not None else (args.slips if args.slips is not None else SLIPS_B)
 
     with httpx.Client(headers=POST_HEADERS, timeout=30) as client:
         if args.league or args.scope == "top":
@@ -337,14 +342,14 @@ def main() -> int:
                 cat_pools = {k: [s for s in v if market_category(s["market_name"]) == cat]
                              for k, v in pools.items()}
                 cat_pools = {k: v for k, v in cat_pools.items() if v}
-                for i, slip in enumerate(build_slips(cat_pools, args.size, args.slips_b), 1):
+                for i, slip in enumerate(build_slips(cat_pools, args.size, slips_b), 1):
                     groups.append((f"{cat} #{i}", slip))
         else:
             if args.set in ("both", "a"):
-                for i, slip in enumerate(build_slips(pools, args.size, args.slips_a), 1):
+                for i, slip in enumerate(build_slips(pools, args.size, slips_a), 1):
                     groups.append((f"A{i}", slip))
             if args.set in ("both", "b"):
-                for i, slip in enumerate(build_diversified_slips(pools, args.size, args.slips_b), 1):
+                for i, slip in enumerate(build_diversified_slips(pools, args.size, slips_b), 1):
                     groups.append((f"B{i}", slip))
 
         if not groups:
@@ -363,7 +368,7 @@ def main() -> int:
 
         lines = [f"Eljam3ia dual-set betslips - built {now_utc()}",
                  f"window {lo:g}..{hi:g}, {args.size} legs/slip; "
-                 f"SET A all-odds (<= {args.slips_a}), SET B 7-category diversified (<= {args.slips_b}), "
+                 f"SET A all-odds (<= {slips_a}), SET B 7-category diversified (<= {slips_b}), "
                  f"{len(pools)} matches",
                  "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code (before kickoff).", ""]
         current = None
@@ -378,7 +383,12 @@ def main() -> int:
             for s in slip:
                 combined *= s["price"]
             win = slip_win_pct(slip)
-            header = (f"BETSLIP {label}  ({len(slip)} legs, combined odds x{combined:.2f}, win% {win:.3g})"
+            extra = ""
+            if label.startswith("B"):
+                fam = Counter(market_category(s["market_name"]) for s in slip)
+                shown = "; ".join(f"{k} x{fam[k]}" for k in CATEGORY_ORDER if fam.get(k))
+                extra = f", families: {shown}"
+            header = (f"BETSLIP {label}  ({len(slip)} legs, combined odds x{combined:.2f}, win% {win:.3g}{extra})"
                       + ("  [partial]" if len(slip) < args.size else ""))
             print(f"\n{header}")
             lines.append(header)
