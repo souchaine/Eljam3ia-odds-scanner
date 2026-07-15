@@ -2,7 +2,8 @@
 
 Runs the existing scripts in sequence (no logic duplicated here):
   1. eljam3ia_odds_scanner.py  -> odds_matrix_*.csv + _meta.csv
-  2. make_betslips.py          -> betslips_*.txt with a Booking Code per 20-leg slip (up to 50 slips)
+  2. make_betslips.py          -> betslips_*.txt: two sets per run (SET A up to 50 all-odds +
+                                  SET B up to 25 diversified), each 20-leg slip with a Booking Code + win%
 
 Each run writes into its own dated folder  output/run_YYYYMMDD_HHMM/  and finishes with a
 summary.txt (and console summary) listing the matrix stats and all booking codes.
@@ -10,10 +11,10 @@ summary.txt (and console summary) listing the matrix stats and all booking codes
 Booking codes go stale as matches kick off, so codes are always minted fresh at run time.
 
 Usage:
-    py run_all.py                                 # full pipeline with project defaults
+    py run_all.py                                 # full pipeline, both sets (SET A 50 + SET B 25)
     py run_all.py --size 20                        # legs per betslip (forwarded)
     py run_all.py --skip-betslips                  # matrix only
-    py run_all.py --target 1.3..1.45 --slips 50    # forwarded to both scripts
+    py run_all.py --set b --slips-b 15             # SET B only, capped at 15 slips
     py run_all.py --hours 0 --scope top            # widen scope / disable today-window
 
 Scheduled use: run_all.cmd wraps this for Windows Task Scheduler (see README).
@@ -59,7 +60,7 @@ def summarize(run_dir: Path) -> str:
     if slips:
         text = slips[-1].read_text(encoding="utf-8")
         codes = re.findall(r">> BOOKING CODE: (\S+)", text)
-        headers = re.findall(r"^(BETSLIP \d+.*)$", text, re.M)
+        headers = re.findall(r"^(BETSLIP \S+.*)$", text, re.M)
         lines.append(f"BETSLIPS ({slips[-1].name})")
         for header, code in zip(headers, codes):
             lines.append(f"  {code}  <-  {header}")
@@ -83,6 +84,11 @@ def main() -> int:
     parser.add_argument("--hours", type=float, default=None, help="kickoff window in hours (forwarded)")
     parser.add_argument("--scope", choices=["all", "top"], default=None, help="league scope (forwarded)")
     parser.add_argument("--slips", type=int, default=None, help="max betslips (forwarded)")
+    parser.add_argument("--per-category", action="store_true",
+                        help="build category-pure betslips (forwarded)")
+    parser.add_argument("--set", choices=["both", "a", "b"], default=None, help="set(s) to build (forwarded)")
+    parser.add_argument("--slips-a", type=int, default=None, help="max SET A slips (forwarded)")
+    parser.add_argument("--slips-b", type=int, default=None, help="max SET B slips (forwarded)")
     args = parser.parse_args()
 
     run_dir = PROJECT_DIR / "output" / f"run_{datetime.now().strftime('%Y%m%d_%H%M')}"
@@ -104,6 +110,11 @@ def main() -> int:
             slip_args += ["--size", str(args.size)]
         if args.slips is not None:
             slip_args += ["--slips", str(args.slips)]
+        for f, v in (("--set", args.set), ("--slips-a", args.slips_a), ("--slips-b", args.slips_b)):
+            if v is not None:
+                slip_args += [f, str(v)]
+        if args.per_category:
+            slip_args.append("--per-category")
         run_step("Step 2/2: betslips + booking codes", "make_betslips.py", slip_args)
 
     summary = summarize(run_dir)

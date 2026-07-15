@@ -1,8 +1,10 @@
 """Build multiplier (accumulator) betslips from eljam3ia and reserve a booking code for each.
 
 For the leagues in scope, this collects EVERY qualifying selection per match (price within the
-target range/tolerance) into a pool, then greedily builds up to `--slips` accumulators (default 50)
-of `--size` legs each (default 20). A match is unique WITHIN a slip, but may repeat ACROSS slips -
+target range/tolerance) into a pool, then greedily builds two sets per run: SET A (up to
+`--slips-a`, default 50, all-odds) and SET B (up to `--slips-b`, default 25, diversified across
+7 market families) of `--size` legs each (default 20). A match is unique WITHIN a slip, but may
+repeat ACROSS slips -
 each repeat spends a different, not-yet-used qualifying odd for that match, which multiplies the
 number of distinct betslips (and booking codes) that can be produced from the same pool of matches.
 Each betslip is sent to Altenar's reserveBet endpoint, which returns a shareable Booking Code that
@@ -19,9 +21,9 @@ tries to render it ("Oops! This section of the sportsbook didn't load"). This bu
 exact shape the site itself stores when you click odds, so the codes load cleanly.
 
 Usage:
-    py make_betslips.py                     # all leagues, 20 legs per slip, up to 50 slips
+    py make_betslips.py                     # all leagues, SET A (<=50) + SET B (<=25), 20 legs/slip
     py make_betslips.py --size 10
-    py make_betslips.py --slips 20
+    py make_betslips.py --set a --slips-a 20
     py make_betslips.py --league "World Cup 2026" --league "Serie A"
 
 Odds are live: load a code before its matches kick off, or that leg shows as unavailable.
@@ -32,6 +34,7 @@ import json
 import random
 import sys
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -47,7 +50,10 @@ BETSLIP_BASE = "https://sb2betslip-altenar2.biahosted.com/api/Betslip"
 COUNTRY_CODE = "TN"
 GROUP_SIZE = 20   # legs per betslip
 MAX_SLIPS = 50    # max betslips per run
+SLIPS_B = 25      # max slips for the diversified (soft round-robin) builder
 OUTPUT_DIR = "output"
+
+CATEGORY_ORDER = ["main", "combo DC", "1st half", "2nd half", "corners", "carte", "multigoals"]
 
 # body sent with every POST (reserveBet / GetOddsStates)
 COMMON_BODY = {
@@ -78,9 +84,65 @@ def collect_selections(details: dict, lo: float, hi: float) -> list[dict]:
                     continue
                 if lo - EPS <= price <= hi + EPS:
                     seen.add(odd_id)
+                    market_prices = [
+                        odds_by_id[i].get("price")
+                        for grp in odd_ids
+                        for i in (grp if isinstance(grp, list) else [grp])
+                        if i in odds_by_id and odds_by_id[i].get("oddStatus", 0) == 0
+                    ]
                     out.append({"odd": odd, "market": market, "price": price,
-                                "label": clean(odd.get("name")) or "?", "market_name": name})
+                                "label": clean(odd.get("name")) or "?", "market_name": name,
+                                "novig_prob": novig_prob(price, market_prices)})
     return out
+
+
+def market_category(name: str) -> str:
+    """Classify a market name into one of the 7 families (specific stat types win)."""
+    n = (name or "").lower()
+    if "corner" in n:
+        return "corners"
+    if "booking" in n or "card" in n:
+        return "carte"
+    if "multigoal" in n:
+        return "multigoals"
+    if "1st half" in n or "first half" in n:
+        return "1st half"
+    if "2nd half" in n or "second half" in n:
+        return "2nd half"
+    if "double chance" in n or "dc " in n or "/dc" in n or "dc/" in n:
+        return "combo DC"
+    return "main"
+
+
+def novig_prob(price: float, market_prices: list[float]) -> float:
+    """No-vig implied probability of one outcome, normalized over its market's active outcomes.
+
+    A market with fewer than 2 valid outcomes cannot be de-vigged (no counterpart to strip the
+    margin against), so fall back to the raw implied probability 1/price rather than a misleading 1.0.
+    """
+    try:
+        raw = 1.0 / float(price)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+    inv = []
+    for p in market_prices:
+        try:
+            fp = float(p)
+        except (TypeError, ValueError):
+            continue
+        if fp:
+            inv.append(1.0 / fp)
+    return raw / sum(inv) if len(inv) >= 2 else raw
+
+
+def slip_win_pct(slip: list[dict]) -> float:
+    """Model win probability of a slip as a percent: 100 * product of legs' no-vig probs."""
+    if not slip:
+        return 0.0
+    prob = 1.0
+    for s in slip:
+        prob *= s.get("novig_prob", 0.0)
+    return 100.0 * prob
 
 
 def build_slips(pools: dict[str, list[dict]], size: int, max_slips: int) -> list[list[dict]]:
@@ -102,6 +164,53 @@ def build_slips(pools: dict[str, list[dict]], size: int, max_slips: int) -> list
         slip = [items.pop() for _key, items in take]
         slips.append(slip)
         if len(slip) < size:  # could not fill a full slip -> this is the trailing partial
+            break
+    return slips
+
+
+def build_diversified_slips(pools: dict[str, list[dict]], size: int,
+                            max_slips: int) -> list[list[dict]]:
+    """Greedy family round-robin: each slip spreads legs across CATEGORY_ORDER, best-effort.
+
+    Distinct match per slip; each selection (odd) consumed once overall; at most one trailing
+    partial. Thin families contribute what they have; remaining legs fill from any family.
+    """
+    if size <= 0:
+        return []
+    # per-category -> match_key -> list of selections (copies so we can pop without touching caller)
+    by_cat: dict[str, dict[str, list[dict]]] = {c: {} for c in CATEGORY_ORDER}
+    for key, sels in pools.items():
+        for s in sels:
+            cat = market_category(s["market_name"])
+            by_cat.setdefault(cat, {}).setdefault(key, []).append(s)
+
+    def remaining_matches() -> set:
+        return {k for cat in by_cat.values() for k, v in cat.items() if v}
+
+    slips: list[list[dict]] = []
+    while len(slips) < max_slips:
+        if len(remaining_matches()) < 2:
+            break
+        slip: list[dict] = []
+        used_matches: set = set()
+        progressed = True
+        while len(slip) < size and progressed:
+            progressed = False
+            for cat in CATEGORY_ORDER:
+                if len(slip) >= size:
+                    break
+                # eligible matches in this family: have stock and not already in this slip
+                candidates = [(k, v) for k, v in by_cat.get(cat, {}).items() if v and k not in used_matches]
+                if not candidates:
+                    continue
+                k, v = max(candidates, key=lambda kv: len(kv[1]))
+                slip.append(v.pop())
+                used_matches.add(k)
+                progressed = True
+        if not slip:
+            break
+        slips.append(slip)
+        if len(slip) < size:  # could not fill -> trailing partial
             break
     return slips
 
@@ -164,7 +273,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build multiplier betslips and reserve booking codes.")
     parser.add_argument("--league", action="append", help="league name (repeatable); default: Top Leagues")
     parser.add_argument("--size", type=int, default=GROUP_SIZE, help="legs per betslip (default 20)")
-    parser.add_argument("--slips", type=int, default=MAX_SLIPS, help="max betslips per run (default 50)")
+    parser.add_argument("--set", choices=["both", "a", "b"], default="both",
+                        help="which set(s) to build: a=all-odds, b=7-category diversified")
+    parser.add_argument("--slips-a", type=int, default=None, help="max SET A slips (default 50)")
+    parser.add_argument("--slips-b", type=int, default=None, help="max SET B slips (default 25)")
+    parser.add_argument("--slips", type=int, default=None,
+                        help="cap BOTH sets at once (alias; --slips-a/--slips-b take precedence)")
+    parser.add_argument("--per-category", action="store_true",
+                        help="(legacy) build category-pure slips instead of the two sets")
     parser.add_argument("--target", default=f"{TARGET_MIN}..{TARGET_MAX}",
                         help="odd range 'min..max' (or a single value)")
     parser.add_argument("--tolerance", type=float, default=TOLERANCE)
@@ -177,6 +293,8 @@ def main() -> int:
 
     tmin, tmax = parse_target(args.target)
     lo, hi = tmin - args.tolerance, tmax + args.tolerance
+    slips_a = args.slips_a if args.slips_a is not None else (args.slips if args.slips is not None else MAX_SLIPS)
+    slips_b = args.slips_b if args.slips_b is not None else (args.slips if args.slips is not None else SLIPS_B)
 
     with httpx.Client(headers=POST_HEADERS, timeout=30) as client:
         if args.league or args.scope == "top":
@@ -218,29 +336,60 @@ def main() -> int:
                 time.sleep(DELAY_S + random.uniform(0, 0.3))
             print(f"{league_name}: {usable} events with qualifying selections")
 
-        slips = build_slips(pools, args.size, args.slips)
-        if not slips:
+        groups: list[tuple[str, list[dict]]] = []
+        if args.per_category:
+            for cat in CATEGORY_ORDER:
+                cat_pools = {k: [s for s in v if market_category(s["market_name"]) == cat]
+                             for k, v in pools.items()}
+                cat_pools = {k: v for k, v in cat_pools.items() if v}
+                for i, slip in enumerate(build_slips(cat_pools, args.size, slips_b), 1):
+                    groups.append((f"{cat} #{i}", slip))
+        else:
+            if args.set in ("both", "a"):
+                for i, slip in enumerate(build_slips(pools, args.size, slips_a), 1):
+                    groups.append((f"A{i}", slip))
+            if args.set in ("both", "b"):
+                for i, slip in enumerate(build_diversified_slips(pools, args.size, slips_b), 1):
+                    groups.append((f"B{i}", slip))
+
+        if not groups:
             print("No betslips could be built (no qualifying selections in range).")
             return 1
-        used = [s for slip in slips for s in slip]
-        enrich_odds(client, used)  # enrich only the odds actually used
 
-        out_dir = Path(args.out)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M")
-        txt_path = out_dir / f"betslips_{stamp}.txt"
-        lines = [f"Eljam3ia multiplier betslips - built {now_utc()}",
-                 f"window {lo:g}..{hi:g}, {args.size} legs/slip, up to {args.slips} slips, "
-                 f"{len(pools)} matches -> {len(slips)} betslips (matches may repeat across slips "
-                 f"with different odds)",
+        used = [s for _label, slip in groups for s in slip]
+        enrich_odds(client, used)
+
+        def section_of(label: str) -> str:
+            if label.startswith("A"):
+                return "SET A: all-odds"
+            if label.startswith("B"):
+                return "SET B: 7-category diversified"
+            return label.rsplit(" #", 1)[0]  # legacy per-category
+
+        lines = [f"Eljam3ia dual-set betslips - built {now_utc()}",
+                 f"window {lo:g}..{hi:g}, {args.size} legs/slip; "
+                 f"SET A all-odds (<= {slips_a}), SET B 7-category diversified (<= {slips_b}), "
+                 f"{len(pools)} matches",
                  "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code (before kickoff).", ""]
-
-        for gi, slip in enumerate(slips, 1):
+        current = None
+        for label, slip in groups:
+            sec = section_of(label)
+            if sec != current:
+                current = sec
+                hdr = f"\n===== {sec} ====="
+                print(hdr)
+                lines.append(hdr)
             combined = 1.0
             for s in slip:
                 combined *= s["price"]
-            header = (f"BETSLIP {gi}  ({len(slip)} legs, combined odds x{combined:.2f})"
-                      + ("  [partial - fewer than requested]" if len(slip) < args.size else ""))
+            win = slip_win_pct(slip)
+            extra = ""
+            if label.startswith("B"):
+                fam = Counter(market_category(s["market_name"]) for s in slip)
+                shown = "; ".join(f"{k} x{fam[k]}" for k in CATEGORY_ORDER if fam.get(k))
+                extra = f", families: {shown}"
+            header = (f"BETSLIP {label}  ({len(slip)} legs, combined odds x{combined:.2f}, win% {win:.3g}{extra})"
+                      + ("  [partial]" if len(slip) < args.size else ""))
             print(f"\n{header}")
             lines.append(header)
             for li, s in enumerate(slip, 1):
@@ -257,6 +406,10 @@ def main() -> int:
             lines.append("")
             time.sleep(0.5)
 
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        txt_path = out_dir / f"betslips_{stamp}.txt"
         txt_path.write_text("\n".join(lines), encoding="utf-8")
         print(f"\nSaved {txt_path}")
     return 0
