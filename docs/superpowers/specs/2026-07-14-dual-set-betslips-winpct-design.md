@@ -1,5 +1,14 @@
 # Dual-Set Betslips + Win% — Design (Sub-project 1)
 
+> **SUPERSEDED (2026-07-16) — the de-vig approach below was a bug.** This spec's `novig_prob`
+> normalized `1/price` over a market's listed outcomes. Altenar bundles many *lines* into one market
+> (a "Total" market carries Over 0.5 … Over 3 and every Under), so that denominator sums to ~10
+> rather than a real market's ~1.05 — crushing every leg ~10×, producing absurd win% values (~1e-20
+> for 20 legs) and, because the bundle size differs per market, breaking monotonicity between a
+> slip's win% and its odds. **Shipped behaviour:** `implied_prob(price) = 1/price` and
+> `slip_win_pct = 100 × Π(1/price) = 100 / combined_odds`. Do not re-introduce outcome-set
+> normalization without first solving line-pairing (e.g. pairing `Over 2.5` only with `Under 2.5`).
+
 ## Context
 
 The betslip builder currently produces one kind of output (mixed 20-leg accumulators, up to 50, or

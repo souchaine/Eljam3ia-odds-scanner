@@ -84,15 +84,8 @@ def collect_selections(details: dict, lo: float, hi: float) -> list[dict]:
                     continue
                 if lo - EPS <= price <= hi + EPS:
                     seen.add(odd_id)
-                    market_prices = [
-                        odds_by_id[i].get("price")
-                        for grp in odd_ids
-                        for i in (grp if isinstance(grp, list) else [grp])
-                        if i in odds_by_id and odds_by_id[i].get("oddStatus", 0) == 0
-                    ]
                     out.append({"odd": odd, "market": market, "price": price,
-                                "label": clean(odd.get("name")) or "?", "market_name": name,
-                                "novig_prob": novig_prob(price, market_prices)})
+                                "label": clean(odd.get("name")) or "?", "market_name": name})
     return out
 
 
@@ -114,34 +107,36 @@ def market_category(name: str) -> str:
     return "main"
 
 
-def novig_prob(price: float, market_prices: list[float]) -> float:
-    """No-vig implied probability of one outcome, normalized over its market's active outcomes.
+def implied_prob(price: float) -> float:
+    """Implied probability of one outcome from its decimal odds (bookmaker margin included).
 
-    A market with fewer than 2 valid outcomes cannot be de-vigged (no counterpart to strip the
-    margin against), so fall back to the raw implied probability 1/price rather than a misleading 1.0.
+    We deliberately do NOT de-vig by normalizing over a market's listed outcomes. Altenar bundles
+    many LINES into a single market - a "Total" market carries Over 0.5 / Over 1 / ... / Over 3 and
+    every Under alongside them - which are not mutually exclusive outcomes. Summing 1/p across them
+    gives ~10 instead of a real market's ~1.05, crushing each leg ~10x and (because the bundle size
+    differs per market) destroying any monotonic relationship between a slip's win% and its odds.
+    Raw implied probability is transparent and keeps win% == 100 / combined_odds.
     """
     try:
-        raw = 1.0 / float(price)
-    except (TypeError, ValueError, ZeroDivisionError):
+        p = float(price)
+    except (TypeError, ValueError):
         return 0.0
-    inv = []
-    for p in market_prices:
-        try:
-            fp = float(p)
-        except (TypeError, ValueError):
-            continue
-        if fp:
-            inv.append(1.0 / fp)
-    return raw / sum(inv) if len(inv) >= 2 else raw
+    return 1.0 / p if p > 0 else 0.0
 
 
 def slip_win_pct(slip: list[dict]) -> float:
-    """Model win probability of a slip as a percent: 100 * product of legs' no-vig probs."""
+    """Slip win probability as a percent: 100 * product of legs' implied probs.
+
+    Equals 100 / combined_odds, so it is strictly monotonic with the slip's payout odds.
+    """
     if not slip:
         return 0.0
     prob = 1.0
     for s in slip:
-        prob *= s.get("novig_prob", 0.0)
+        p = implied_prob(s.get("price"))
+        if p <= 0:
+            return 0.0
+        prob *= p
     return 100.0 * prob
 
 

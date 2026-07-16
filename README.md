@@ -40,9 +40,15 @@ With `--per-category`, betslips are grouped into 7 market families (main, combo 
 that family.
 
 Each run builds **two sets**: SET A = up to 50 all-odds 20-leg slips; SET B = up to 25 slips
-diversified across the 7 market families. Every slip shows a de-vigged **win%** (model
-probability; for 20-leg accumulators this is inherently tiny). Restrict with `--set a|b`; sizes
-via `--slips-a`/`--slips-b`.
+diversified across the 7 market families. Every slip shows a **win%** — the implied probability
+from the odds, i.e. `100 / combined_odds` (bookmaker margin included), so it is always monotonic
+with the payout: longer odds ⇒ lower win%. For 20-leg accumulators it is inherently tiny (~0.1–0.5%).
+Restrict with `--set a|b`; sizes via `--slips-a`/`--slips-b`.
+
+> We deliberately do **not** de-vig by normalizing across a market's listed outcomes: Altenar bundles
+> many *lines* into one market (a "Total" market carries Over 0.5 … Over 3 plus every Under), so that
+> denominator sums to ~10 instead of ~1.05 — which crushed each leg ~10× and made win% depend on
+> which markets a slip's legs came from rather than on its odds.
 
 By default every run covers **all football leagues with matches in the next 23 hours**
 (`DATE_FILTER = Only Today (23 h)`); use `--hours`/`--scope` to widen.

@@ -25,7 +25,7 @@ functions for parsing + grading; thin I/O around them; a CLI to run it.
 ### Data types
 - `MatchOutcome`: `{match: str, home: int, away: int, ht_home: int | None, ht_away: int | None}`.
   v1 grading uses `home`/`away` (full time); `ht_*` reserved for half markets (future).
-- `Leg`: `{league, match, market, selection, odd: float, novig_prob?}` (from the betslips file).
+- `Leg`: `{league, match, market, selection, odd: float}` (from the betslips file).
 - `Slip`: `{set: "A"|"B", label, code, pred_win_pct: float, legs: list[Leg]}`.
 
 ### Functions (pure, TDD)
