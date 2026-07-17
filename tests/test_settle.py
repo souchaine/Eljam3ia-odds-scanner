@@ -57,3 +57,42 @@ def test_settle_run_tallies_trackers():
     r = settle_run(slips, out)
     assert r["A"] == {"won": 1, "gradeable": 1, "total": 1}
     assert r["B"] == {"won": 0, "gradeable": 0, "total": 1}
+
+
+def test_parse_betslips_survives_malformed_numbers():
+    text = ("===== SET A: all-odds =====\n"
+            "BETSLIP A9  (1 legs, win% 1.4.0)\n"
+            "   1. L - A vs. B - 1x2: 1 @ 1.4.0\n"
+            "  >> BOOKING CODE: ZZZ99\n")
+    slips = parse_betslips(text)          # must not raise
+    assert slips[0]["pred_win_pct"] == 0.0
+    assert len(slips[0]["legs"]) == 1     # leg kept, not silently dropped
+    assert slips[0]["legs"][0]["odd"] == 0.0
+
+
+def test_read_outcomes_csv_skips_malformed_rows():
+    out = read_outcomes_csv("match,home,away\nA vs. B,2,1\nBad Row,x,y\nShort\n")
+    assert "A vs. B" in out and "Bad Row" not in out and "Short" not in out
+
+
+def test_read_outcomes_csv_reads_halftime_columns():
+    out = read_outcomes_csv("match,home,away,ht_home,ht_away\nA vs. B,2,1,1,0\n")
+    assert out["A vs. B"].ht_home == 1 and out["A vs. B"].ht_away == 0
+
+
+def test_settle_run_reports_verdicts():
+    slips = parse_betslips(BETSLIPS)
+    out = read_outcomes_csv(OUTCOMES)
+    r = settle_run(slips, out)
+    assert r["verdicts"][0][:2] == ("A1", "won")
+    assert r["verdicts"][1][:2] == ("B1", "ungradeable")
+
+
+def test_all_void_slip_is_ungradeable():
+    text = ("===== SET A: all-odds =====\n"
+            "BETSLIP A8  (1 legs, win% 50)\n"
+            "   1. L - A vs. B - Draw no bet: 1 @ 1.40\n"
+            "  >> BOOKING CODE: VVV11\n")
+    slips = parse_betslips(text)
+    outcomes = read_outcomes_csv("match,home,away\nA vs. B,1,1\n")   # draw -> DNB voids
+    assert grade_slip(slips[0], outcomes) == "ungradeable"
