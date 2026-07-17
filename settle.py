@@ -241,6 +241,11 @@ def append_backtest(path: Path, run_dir: str, slips: list[dict], result: dict) -
 
 
 def main() -> int:
+    for _stream in (sys.stdout, sys.stderr):  # tolerate non-cp1252 names (e.g. 'ă') on Windows
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="Settle a run's betslips against match scores.")
     ap.add_argument("betslips", help="path to a betslips_*.txt")
     ap.add_argument("--outcomes", required=True, help="scores CSV: match,home,away[,ht_home,ht_away]")

@@ -219,6 +219,11 @@ def write_meta(path: Path, info: dict) -> None:
 
 
 def main() -> int:
+    for _stream in (sys.stdout, sys.stderr):  # tolerate non-cp1252 names (e.g. 'ă') on Windows
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(description="Scan eljam3ia.com odds for selections near a target.")
     parser.add_argument("--league", action="append",
                         help="league name (repeatable); default: the site's Top Leagues section")

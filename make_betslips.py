@@ -264,7 +264,17 @@ def reserve(client: httpx.Client, picks: list[dict]) -> str:
     return data["Result"]["ReservationKey"]
 
 
+def _utf8_console() -> None:
+    """Make stdout/stderr tolerate non-cp1252 names (e.g. 'ă') on Windows, instead of crashing."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> int:
+    _utf8_console()
     parser = argparse.ArgumentParser(description="Build multiplier betslips and reserve booking codes.")
     parser.add_argument("--league", action="append", help="league name (repeatable); default: Top Leagues")
     parser.add_argument("--size", type=int, default=GROUP_SIZE, help="legs per betslip (default 20)")
