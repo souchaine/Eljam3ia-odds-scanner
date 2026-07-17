@@ -176,22 +176,21 @@ def read_outcomes_csv(text: str) -> dict[str, MatchOutcome]:
     return out
 
 
-def _leg_verdicts(slip: dict, outcomes: dict[str, MatchOutcome]) -> list[str] | None:
-    """Per-leg verdicts, or None if the slip cannot be graded at all."""
+def _leg_verdicts(slip: dict, outcomes: dict[str, MatchOutcome]) -> list[str]:
+    """Per-leg verdicts, one per leg. A leg whose match has no outcome is 'unsettleable'."""
     out = []
     for leg in slip["legs"]:
         o = outcomes.get(leg["match"])
         if o is None:
-            return None
-        v = grade_leg(leg["market"], leg["selection"], o)
-        if v == "unsettleable":
-            return None
-        out.append(v)
+            out.append("unsettleable")
+        else:
+            out.append(grade_leg(leg["market"], leg["selection"], o))
     return out
 
 
-def _verdict_from(leg_verdicts: list[str] | None) -> str:
-    if leg_verdicts is None:
+def _verdict_from(leg_verdicts: list[str]) -> str:
+    """ungradeable if any leg is unsettleable (or nothing is left after voids); else won iff all won."""
+    if any(v == "unsettleable" for v in leg_verdicts):
         return "ungradeable"
     graded = [v for v in leg_verdicts if v != "void"]
     if not graded:
@@ -214,7 +213,7 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
         tally[st]["total"] += 1
         lv = _leg_verdicts(slip, outcomes)
         verdict = _verdict_from(lv)
-        won_legs = sum(1 for v in (lv or []) if v == "won")
+        won_legs = sum(1 for v in lv if v == "won")
         if verdict != "ungradeable":
             tally[st]["gradeable"] += 1
             if verdict == "won":
