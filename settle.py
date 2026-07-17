@@ -14,6 +14,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 
 # markets we cannot grade from a final score alone (stats / halves / combos)
 UNSETTLEABLE = re.compile(
@@ -220,3 +221,67 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
                 tally[st]["won"] += 1
         verdicts.append((slip["label"], verdict, len(slip["legs"]), won_legs))
     return {**tally, "verdicts": verdicts}
+
+
+class ResultsSource(Protocol):
+    def outcomes_for(self, slips: list[dict]) -> dict[str, MatchOutcome]:
+        ...
+
+
+class NoResultsSource:
+    """Placeholder until a football-data/API-Football adapter is wired in."""
+    def outcomes_for(self, slips: list[dict]) -> dict[str, MatchOutcome]:
+        return {}
+
+
+def append_backtest(path: Path, run_dir: str, slips: list[dict], result: dict) -> None:
+    by_label = {v[0]: v for v in result["verdicts"]}
+    new = not path.exists()
+    with path.open("a", newline="", encoding="utf-8-sig") as fh:
+        w = csv.writer(fh)
+        if new:
+            w.writerow(["settled_at", "run_dir", "set", "code", "legs",
+                        "pred_win_pct", "verdict", "gradeable_legs", "won_legs"])
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for slip in slips:
+            _, verdict, legs, won_legs = by_label[slip["label"]]
+            w.writerow([now, run_dir, slip["set"], slip["code"], legs,
+                        f"{slip['pred_win_pct']:g}", verdict, legs, won_legs])
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Settle a run's betslips against match scores.")
+    ap.add_argument("betslips", help="path to a betslips_*.txt")
+    ap.add_argument("--outcomes", required=True, help="scores CSV: match,home,away[,ht_home,ht_away]")
+    ap.add_argument("--backtest", default="output/backtest.csv", help="append per-slip rows here")
+    args = ap.parse_args()
+
+    bpath, opath = Path(args.betslips), Path(args.outcomes)
+    if not bpath.exists():
+        print(f"betslips file not found: {bpath}")
+        return 1
+    if not opath.exists():
+        print(f"outcomes file not found: {opath}")
+        return 1
+
+    slips = parse_betslips(bpath.read_text(encoding="utf-8"))
+    outcomes = read_outcomes_csv(opath.read_text(encoding="utf-8-sig"))
+    result = settle_run(slips, outcomes)
+
+    for st, cap in (("A", 50), ("B", 25)):
+        t = result[st]
+        print(f"SET {st}: {t['won']}/{t['gradeable']} gradeable won "
+              f"-> tracker {min(t['won'], cap)}/{cap}  ({t['total']} slips total)")
+    ungr = sum(1 for _l, v, _n, _w in result["verdicts"] if v == "ungradeable")
+    if ungr:
+        print(f"  ({ungr} slip(s) ungradeable — stat/half legs or missing scores)")
+
+    backtest = Path(args.backtest)
+    backtest.parent.mkdir(parents=True, exist_ok=True)
+    append_backtest(backtest, bpath.parent.name, slips, result)
+    print(f"Appended {len(slips)} rows to {backtest}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

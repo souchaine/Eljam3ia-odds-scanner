@@ -105,6 +105,20 @@ Notes on the matrix:
 - Odds move live — `Scraped At (UTC)` records when each match was read.
 - A match with zero qualifying selections still gets a row (all market cells blank).
 
+## Settlement / backtest
+
+`settle.py` grades a run's betslips against a hand-entered scores CSV
+(`match,home,away[,ht_home,ht_away]`), prints the two trackers (SET A 0..50, SET B 0..25 — winning
+slips), and appends per-slip rows to `output/backtest.csv`. v1 grades full-time score markets (1x2,
+totals, BTTS, double chance, correct score, multigoals, draw-no-bet, handicap); corners/cards/shots
+and half-split markets show as *ungradeable* until a stats provider is added. Booking-code
+accumulators of 20 legs win ~never, so trackers read near zero — the backtest is for measuring, not
+a target.
+
+```
+py settle.py output/run_YYYYMMDD_HHMM/betslips_*.txt --outcomes scores.csv --backtest output/backtest.csv
+```
+
 ## Behaviour / etiquette
 
 - Single-threaded, ~0.7–1 s between event requests, 3 retries with backoff on transient errors.
