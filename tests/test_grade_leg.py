@@ -85,3 +85,11 @@ def test_btts_unrecognized_selection_is_unsettleable():
 
 def test_handicap_trailing_garbage_is_unsettleable():
     assert grade_leg("Handicap", "1 (-1.5) extra", O) == "unsettleable"
+
+
+def test_total_trailing_garbage_is_unsettleable():
+    assert grade_leg("Total", "Over 2.5 asdf", O) == "unsettleable"
+
+
+def test_btts_trailing_garbage_is_unsettleable():
+    assert grade_leg("Both Teams To Score", "Yes please", O) == "unsettleable"

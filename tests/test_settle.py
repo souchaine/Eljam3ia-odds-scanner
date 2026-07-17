@@ -70,6 +70,12 @@ def test_parse_betslips_survives_malformed_numbers():
     assert slips[0]["legs"][0]["odd"] == 0.0
 
 
+def test_read_outcomes_csv_notes_skipped_rows(capsys):
+    out = read_outcomes_csv("match,home,away\nA vs. B,2,1\nBad Row,x,y\n")
+    assert "A vs. B" in out and "Bad Row" not in out
+    assert "malformed" in capsys.readouterr().err
+
+
 def test_read_outcomes_csv_skips_malformed_rows():
     out = read_outcomes_csv("match,home,away\nA vs. B,2,1\nBad Row,x,y\nShort\n")
     assert "A vs. B" in out and "Bad Row" not in out and "Short" not in out

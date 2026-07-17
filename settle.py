@@ -54,29 +54,21 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
         return "won" if sel == res else "lost"
 
     if key == "total":
-        low = sel.lower()
-        if low.startswith("over"):
-            over = True
-        elif low.startswith("under"):
-            over = False
-        else:
+        m = re.match(r"\s*(over|under)\s+(\d+(?:\.\d+)?)\s*$", sel, re.IGNORECASE)
+        if not m:
             return "unsettleable"
-        line = _num(sel)
-        if line is None:
-            return "unsettleable"
+        over = m.group(1).lower() == "over"
+        line = float(m.group(2))
         if total == line:
             return "void"
         hit = total > line if over else total < line
         return "won" if hit else "lost"
 
     if key == "both teams to score":
-        low = sel.lower()
-        if low.startswith("y"):
-            yes = True
-        elif low.startswith("n"):
-            yes = False
-        else:
+        m = re.match(r"\s*(yes|no)\s*$", sel, re.IGNORECASE)
+        if not m:
             return "unsettleable"
+        yes = m.group(1).lower() == "yes"
         both = o.home > 0 and o.away > 0
         return "won" if both == yes else "lost"
 
@@ -172,6 +164,7 @@ def read_outcomes_csv(text: str) -> dict[str, MatchOutcome]:
             hth = int(row[3]) if len(row) > 3 and row[3].strip() != "" else None
             hta = int(row[4]) if len(row) > 4 and row[4].strip() != "" else None
         except (IndexError, ValueError):
+            print(f"  ! skipping malformed outcomes row: {row}", file=sys.stderr)
             continue
         out[match] = MatchOutcome(match, home, away, hth, hta)
     return out
@@ -239,7 +232,7 @@ class NoResultsSource:
 
 
 def append_backtest(path: Path, run_dir: str, slips: list[dict], result: dict) -> None:
-    by_label = {v[0]: v for v in result["verdicts"]}
+    """Append one row per slip. slips and result["verdicts"] are positionally aligned."""
     new = not path.exists()
     with path.open("a", newline="", encoding="utf-8-sig") as fh:
         w = csv.writer(fh)
@@ -247,8 +240,7 @@ def append_backtest(path: Path, run_dir: str, slips: list[dict], result: dict) -
             w.writerow(["settled_at", "run_dir", "set", "code", "legs",
                         "pred_win_pct", "verdict", "gradeable_legs", "won_legs"])
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        for slip in slips:
-            _, verdict, legs, won_legs, gradeable_legs = by_label[slip["label"]]
+        for slip, (_label, verdict, legs, won_legs, gradeable_legs) in zip(slips, result["verdicts"]):
             w.writerow([now, run_dir, slip["set"], slip["code"], legs,
                         f"{slip['pred_win_pct']:g}", verdict, gradeable_legs, won_legs])
 
