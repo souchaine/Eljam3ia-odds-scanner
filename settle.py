@@ -35,11 +35,6 @@ def _result(o: MatchOutcome) -> str:
     return "1" if o.home > o.away else ("2" if o.away > o.home else "Draw")
 
 
-def _num(text: str) -> float | None:
-    m = re.search(r"-?\d+(?:\.\d+)?", text)
-    return float(m.group()) if m else None
-
-
 def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
     """Grade one leg from the full-time score. Returns won|lost|void|unsettleable."""
     name = str(market or "").strip()
