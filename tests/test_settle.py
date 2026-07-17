@@ -107,6 +107,22 @@ def test_won_legs_counts_individually_won_legs_even_when_ungradeable():
     slips = parse_betslips(text)
     out = read_outcomes_csv("match,home,away\nA vs. B,2,1\nC vs. D,3,0\n")
     r = settle_run(slips, out)
-    _label, verdict, _legs, won_legs = r["verdicts"][0]
+    _label, verdict, _legs, won_legs, _gradeable_legs = r["verdicts"][0]
     assert verdict == "ungradeable"   # the corners leg cannot be graded
     assert won_legs == 1              # ...but the 1x2 leg genuinely won
+
+
+def test_gradeable_legs_counts_only_score_gradeable_legs():
+    text = ("===== SET A: all-odds =====\n"
+            "BETSLIP A6  (2 legs, win% 10)\n"
+            "   1. L - A vs. B - 1x2: 1 @ 1.40\n"
+            "   2. L - C vs. D - Total corners: Over 8.5 @ 1.40\n"
+            "  >> BOOKING CODE: GGG11\n")
+    slips = parse_betslips(text)
+    out = read_outcomes_csv("match,home,away\nA vs. B,2,1\nC vs. D,3,0\n")
+    r = settle_run(slips, out)
+    _label, verdict, legs, won_legs, gradeable_legs = r["verdicts"][0]
+    assert legs == 2                 # two legs total
+    assert gradeable_legs == 1       # only the 1x2 leg is score-gradeable
+    assert won_legs == 1
+    assert verdict == "ungradeable"  # the corners leg blocks a slip verdict

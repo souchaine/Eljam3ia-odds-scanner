@@ -205,7 +205,10 @@ def grade_slip(slip: dict, outcomes: dict[str, MatchOutcome]) -> str:
 
 
 def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
-    """Tally per-set trackers and per-slip verdicts."""
+    """Tally per-set trackers and per-slip verdicts.
+
+    Each verdicts entry is (label, verdict, legs, won_legs, gradeable_legs).
+    """
     tally = {"A": {"won": 0, "gradeable": 0, "total": 0},
              "B": {"won": 0, "gradeable": 0, "total": 0}}
     verdicts = []
@@ -215,11 +218,12 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
         lv = _leg_verdicts(slip, outcomes)
         verdict = _verdict_from(lv)
         won_legs = sum(1 for v in lv if v == "won")
+        gradeable_legs = sum(1 for v in lv if v != "unsettleable")
         if verdict != "ungradeable":
             tally[st]["gradeable"] += 1
             if verdict == "won":
                 tally[st]["won"] += 1
-        verdicts.append((slip["label"], verdict, len(slip["legs"]), won_legs))
+        verdicts.append((slip["label"], verdict, len(slip["legs"]), won_legs, gradeable_legs))
     return {**tally, "verdicts": verdicts}
 
 
@@ -244,9 +248,9 @@ def append_backtest(path: Path, run_dir: str, slips: list[dict], result: dict) -
                         "pred_win_pct", "verdict", "gradeable_legs", "won_legs"])
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for slip in slips:
-            _, verdict, legs, won_legs = by_label[slip["label"]]
+            _, verdict, legs, won_legs, gradeable_legs = by_label[slip["label"]]
             w.writerow([now, run_dir, slip["set"], slip["code"], legs,
-                        f"{slip['pred_win_pct']:g}", verdict, legs, won_legs])
+                        f"{slip['pred_win_pct']:g}", verdict, gradeable_legs, won_legs])
 
 
 def main() -> int:
@@ -272,7 +276,7 @@ def main() -> int:
         t = result[st]
         print(f"SET {st}: {t['won']}/{t['gradeable']} gradeable won "
               f"-> tracker {min(t['won'], cap)}/{cap}  ({t['total']} slips total)")
-    ungr = sum(1 for _l, v, _n, _w in result["verdicts"] if v == "ungradeable")
+    ungr = sum(1 for _l, v, _n, _w, _g in result["verdicts"] if v == "ungradeable")
     if ungr:
         print(f"  ({ungr} slip(s) ungradeable — stat/half legs or missing scores)")
 
