@@ -65,3 +65,23 @@ def test_unsettleable_markets():
 
 def test_unknown_market_is_unsettleable():
     assert grade_leg("Some Novel Market", "Yes", O) == "unsettleable"
+
+
+def test_never_raises_on_non_string_market_or_selection():
+    assert grade_leg(123, "1", O) == "unsettleable"
+    assert grade_leg("1x2", 456, O) in ("won", "lost", "unsettleable")
+    assert grade_leg(None, None, O) == "unsettleable"
+
+
+def test_total_unrecognized_selection_is_unsettleable():
+    # must NOT be silently graded as an Under
+    assert grade_leg("Total", "asdf 2.5", O) == "unsettleable"
+
+
+def test_btts_unrecognized_selection_is_unsettleable():
+    # must NOT be silently graded as a No
+    assert grade_leg("Both Teams To Score", "asdf", O) == "unsettleable"
+
+
+def test_handicap_trailing_garbage_is_unsettleable():
+    assert grade_leg("Handicap", "1 (-1.5) extra", O) == "unsettleable"

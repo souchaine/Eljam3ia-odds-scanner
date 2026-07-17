@@ -41,8 +41,8 @@ def _num(text: str) -> float | None:
 
 def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
     """Grade one leg from the full-time score. Returns won|lost|void|unsettleable."""
-    name = (market or "").strip()
-    sel = (selection or "").strip()
+    name = str(market or "").strip()
+    sel = str(selection or "").strip()
     if UNSETTLEABLE.search(name):
         return "unsettleable"
     key = name.lower()
@@ -53,18 +53,30 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
         return "won" if sel == res else "lost"
 
     if key == "total":
+        low = sel.lower()
+        if low.startswith("over"):
+            over = True
+        elif low.startswith("under"):
+            over = False
+        else:
+            return "unsettleable"
         line = _num(sel)
         if line is None:
             return "unsettleable"
-        over = sel.lower().startswith("over")
         if total == line:
             return "void"
         hit = total > line if over else total < line
         return "won" if hit else "lost"
 
     if key == "both teams to score":
+        low = sel.lower()
+        if low.startswith("y"):
+            yes = True
+        elif low.startswith("n"):
+            yes = False
+        else:
+            return "unsettleable"
         both = o.home > 0 and o.away > 0
-        yes = sel.lower().startswith("y")
         return "won" if both == yes else "lost"
 
     if key == "double chance":
@@ -93,7 +105,7 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
         return "won" if sel == res else "lost"
 
     if key == "handicap":
-        m = re.match(r"\s*([12])\s*\(([-+]?\d+(?:\.\d+)?)\)", sel)
+        m = re.match(r"\s*([12])\s*\(([-+]?\d+(?:\.\d+)?)\)\s*$", sel)
         if not m:
             return "unsettleable"
         team, hcap = m.group(1), float(m.group(2))
