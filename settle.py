@@ -117,3 +117,89 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
         return "won" if winner == team else "lost"
 
     return "unsettleable"
+
+
+_LEG = re.compile(r"^\s*\d+\.\s+(.*?) - (.*?) - (.*?): (.*?) @ ([\d.]+)\s*$")
+
+
+def parse_betslips(text: str) -> list[dict]:
+    """Parse a betslips_*.txt into slips with set/label/code/pred_win_pct/legs."""
+    slips: list[dict] = []
+    cur_set = None
+    cur = None
+    for line in text.splitlines():
+        sm = re.match(r"=====\s*SET\s+([AB])\b", line)
+        if sm:
+            cur_set = sm.group(1)
+            continue
+        hm = re.match(r"BETSLIP\s+(\S+)\b.*?win%\s*([\d.eE+-]+)", line)
+        if hm:
+            cur = {"set": cur_set, "label": hm.group(1), "code": None,
+                   "pred_win_pct": float(hm.group(2)), "legs": []}
+            slips.append(cur)
+            continue
+        cm = re.match(r"\s*>> BOOKING CODE:\s*(\S+)", line)
+        if cm and cur is not None:
+            cur["code"] = cm.group(1)
+            cur = None
+            continue
+        lm = _LEG.match(line)
+        if lm and cur is not None:
+            cur["legs"].append({"league": lm.group(1).strip(), "match": lm.group(2).strip(),
+                                "market": lm.group(3).strip(), "selection": lm.group(4).strip(),
+                                "odd": float(lm.group(5))})
+    return slips
+
+
+def read_outcomes_csv(text: str) -> dict[str, MatchOutcome]:
+    """Read match,home,away[,ht_home,ht_away] rows into MatchOutcomes keyed by match."""
+    out: dict[str, MatchOutcome] = {}
+    for row in csv.reader(text.splitlines()):
+        if not row or row[0].strip().lower() in ("match", ""):
+            continue
+        try:
+            match = row[0].strip()
+            home, away = int(row[1]), int(row[2])
+            hth = int(row[3]) if len(row) > 3 and row[3].strip() != "" else None
+            hta = int(row[4]) if len(row) > 4 and row[4].strip() != "" else None
+        except (IndexError, ValueError):
+            continue
+        out[match] = MatchOutcome(match, home, away, hth, hta)
+    return out
+
+
+def grade_slip(slip: dict, outcomes: dict[str, MatchOutcome]) -> str:
+    """won iff every non-void leg won; ungradeable if any leg unsettleable / outcome missing."""
+    verdicts = []
+    for leg in slip["legs"]:
+        o = outcomes.get(leg["match"])
+        if o is None:
+            return "ungradeable"
+        v = grade_leg(leg["market"], leg["selection"], o)
+        if v == "unsettleable":
+            return "ungradeable"
+        verdicts.append(v)
+    graded = [v for v in verdicts if v != "void"]
+    if not graded:
+        return "ungradeable"
+    return "won" if all(v == "won" for v in graded) else "lost"
+
+
+def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
+    """Tally per-set trackers and per-slip verdicts."""
+    tally = {"A": {"won": 0, "gradeable": 0, "total": 0},
+             "B": {"won": 0, "gradeable": 0, "total": 0}}
+    verdicts = []
+    for slip in slips:
+        st = slip["set"] if slip["set"] in tally else "A"
+        tally[st]["total"] += 1
+        verdict = grade_slip(slip, outcomes)
+        won_legs = sum(1 for leg in slip["legs"]
+                       if (o := outcomes.get(leg["match"])) is not None
+                       and grade_leg(leg["market"], leg["selection"], o) == "won")
+        if verdict != "ungradeable":
+            tally[st]["gradeable"] += 1
+            if verdict == "won":
+                tally[st]["won"] += 1
+        verdicts.append((slip["label"], verdict, len(slip["legs"]), won_legs))
+    return {**tally, "verdicts": verdicts}
