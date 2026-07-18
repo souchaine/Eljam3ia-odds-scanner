@@ -16,10 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-# markets we cannot grade from a final score alone (stats / halves / combos)
-UNSETTLEABLE = re.compile(
-    r"corner|booking|card|shot|tackle|offside|foul|1st half|2nd half|halftime|half-time| & |odd/even",
-    re.IGNORECASE)
+# markets we cannot grade from a final score alone (stat/event tokens only;
+# halves and combos are handled explicitly by grade_leg's dispatch below)
+UNSETTLEABLE = re.compile(r"corner|booking|card|shot|tackle|offside|foul", re.IGNORECASE)
 
 
 @dataclass
@@ -29,10 +28,6 @@ class MatchOutcome:
     away: int
     ht_home: int | None = None
     ht_away: int | None = None
-
-
-def _result(o: MatchOutcome) -> str:
-    return "1" if o.home > o.away else ("2" if o.away > o.home else "Draw")
 
 
 _DC_PAIRS = {
@@ -128,15 +123,79 @@ def _grade_score(key: str, sel: str, home: int, away: int) -> str:
     return "unsettleable"
 
 
+def _half_score(o: MatchOutcome, which: str) -> tuple[int, int] | None:
+    """(home, away) goals in the given half, or None if half-time score is unknown."""
+    if o.ht_home is None or o.ht_away is None:
+        return None
+    if which == "1st":
+        return (o.ht_home, o.ht_away)
+    return (o.home - o.ht_home, o.away - o.ht_away)   # 2nd half
+
+
+def _score_key(name: str) -> str:
+    """Strip decorations combo/half components can carry that _grade_score's bare keys don't
+    expect: a trailing parenthetical annotation ("double chance (match)" -> "double chance") and
+    a trailing bare line number ("total 5.5" -> "total"; the line is already read from `sel`)."""
+    s = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
+    s = re.sub(r"\s+\d+(?:\.\d+)?$", "", s).strip()
+    return s
+
+
+def _grade_on_half(o: MatchOutcome, which: str, core_market: str, sel: str) -> str:
+    """Grade a core score market on the 1st/2nd-half score; unsettleable if ht unknown or a stat."""
+    if UNSETTLEABLE.search(core_market):
+        return "unsettleable"
+    hs = _half_score(o, which)
+    if hs is None:
+        return "unsettleable"
+    key = _score_key(core_market.strip().lower())
+    if key in ("both teams score", "both teams to score"):
+        key = "both teams to score"
+    return _grade_score(key, sel, hs[0], hs[1])
+
+
+def _combine(verdicts: list[str]) -> str:
+    """Combo precedence: unsettleable > lost > void > won."""
+    if any(v == "unsettleable" for v in verdicts):
+        return "unsettleable"
+    if any(v == "lost" for v in verdicts):
+        return "lost"
+    if any(v == "void" for v in verdicts):
+        return "void"
+    return "won"
+
+
 def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
     """Grade one leg from the full-time score. Returns won|lost|void|unsettleable."""
     name = str(market or "").strip()
     sel = str(selection or "").strip()
+    low = name.lower()
+
+    # combo: split market + selection on " & ", grade each, AND with precedence
+    if " & " in low:
+        mparts = [p.strip() for p in re.split(r"\s+&\s+", name)]
+        sparts = [p.strip() for p in re.split(r"\s+&\s+", sel)]
+        if len(mparts) != len(sparts) or len(mparts) < 2:
+            return "unsettleable"
+        return _combine([grade_leg(mp, sp, o) for mp, sp in zip(mparts, sparts)])
+
+    # "1st/2nd half both teams to score": selection "X/Y" = 1st-half BTTS / 2nd-half BTTS
+    if low == "1st/2nd half both teams to score":
+        parts = [p.strip() for p in sel.split("/")]
+        if len(parts) != 2:
+            return "unsettleable"
+        v1 = _grade_on_half(o, "1st", "both teams to score", parts[0])
+        v2 = _grade_on_half(o, "2nd", "both teams to score", parts[1])
+        return _combine([v1, v2])
+
+    # half markets: "1st half - <core>" / "2nd half - <core>" (or without the dash, inside combos)
+    hm = re.match(r"(1st|2nd)\s*half\s*-?\s*(.*)$", low)
+    if hm and hm.group(2):
+        return _grade_on_half(o, hm.group(1), hm.group(2).strip(), sel)
+
     if UNSETTLEABLE.search(name):
         return "unsettleable"
-    key = name.lower()
-
-    return _grade_score(key, sel, o.home, o.away)
+    return _grade_score(_score_key(low), sel, o.home, o.away)
 
 
 _LEG = re.compile(r"^\s*\d+\.\s+(.*?) - (.*?) - (.*?): (.*?) @ ([\d.]+)\s*$")

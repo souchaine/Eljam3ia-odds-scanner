@@ -129,3 +129,64 @@ def test_grade_score_unknown_is_unsettleable():
     # total/btts/handicap, so a garbage selection is "lost" not "unsettleable" -- this
     # is pre-existing behaviour, unchanged by this refactor (see task-1-report.md).
     assert _grade_score("1x2", "banana", 2, 1) == "lost"
+
+
+HT = MatchOutcome("A vs. B", 2, 1, ht_home=1, ht_away=0)   # HT 1-0, FT 2-1
+NOHT = MatchOutcome("A vs. B", 2, 1)                        # no half-time score
+
+
+def test_half_multigoals():
+    assert grade_leg("1st half - multigoals", "1-3", HT) == "won"   # 1 HT goal
+    assert grade_leg("2nd half - multigoals", "1-3", HT) == "won"   # 2nd half = (2-1)+(1-0)=2
+    assert grade_leg("2nd half - multigoals", "3-5", HT) == "lost"
+
+
+def test_half_missing_ht_is_unsettleable():
+    assert grade_leg("1st half - multigoals", "1-3", NOHT) == "unsettleable"
+
+
+def test_half_clean_sheet_and_total():
+    assert grade_leg("2nd half - 2 Clean sheet", "No", HT) == "won"   # home scored in 2nd half
+    assert grade_leg("1st half - total", "Over 0.5", HT) == "won"     # 1 HT goal > 0.5
+
+
+def test_half_stat_market_still_unsettleable():
+    assert grade_leg("1st half - total bookings", "Over 0.5", HT) == "unsettleable"
+    assert grade_leg("1st half - first corner", "1", HT) == "unsettleable"
+
+
+def test_combo_dc_and_total():
+    assert grade_leg("Double chance & total 5.5", "1/2 & under 5.5", HT) == "won"
+    assert grade_leg("Double chance & total 1.5", "1/2 & under 1.5", HT) == "lost"   # 3 goals
+
+
+def test_combo_dc_match_and_half_btts():
+    # DC "12" (home won) AND 1st-half both-teams-score "no" (away 0 at HT -> not both) -> won/won
+    assert grade_leg("Double chance (match) & 1st half both teams score", "12 & no", HT) == "won"
+
+
+def test_combo_with_stat_component_is_unsettleable():
+    assert grade_leg("1x2 & total corners", "1 & over 8.5", HT) == "unsettleable"
+
+
+def test_combo_precedence_lost_beats_void():
+    # total push (void) & DC lost -> lost
+    assert grade_leg("Double chance & total 3", "x/2 & over 3", HT) == "lost"
+
+
+def test_first_second_half_both_teams_to_score():
+    # HT 1-0 (1st-half BTTS no), 2nd half 1-1 (BTTS yes) -> "No/no": 1st no=won, 2nd no=lost -> lost
+    assert grade_leg("1st/2nd half both teams to score", "No/no", HT) == "lost"
+
+
+def test_first_goal_scorer_combo_unsettleable():
+    assert grade_leg("First goal & 1x2", "1 & 1", HT) == "unsettleable"
+
+
+def test_ft_subtypes_through_grade_leg():
+    # Task-1 FT sub-types, asserted through the public grade_leg entry point
+    # (previously only exercised via _grade_score directly).
+    assert grade_leg("1 Total", "Over 1.5", MatchOutcome("x", 2, 1)) == "won"
+    assert grade_leg("2 Clean sheet", "No", MatchOutcome("x", 2, 1)) == "won"
+    # 3 goals -> odd; only reachable now that the regex no longer blanket-catches odd/even
+    assert grade_leg("Odd/Even", "Odd", MatchOutcome("x", 2, 1)) == "won"
