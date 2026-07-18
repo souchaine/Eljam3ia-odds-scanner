@@ -1,4 +1,4 @@
-from settle import MatchOutcome, grade_leg
+from settle import MatchOutcome, grade_leg, _grade_score
 
 O = MatchOutcome("A vs. B", 2, 1)          # FT 2-1
 D = MatchOutcome("C vs. D", 1, 1)          # draw 1-1
@@ -93,3 +93,39 @@ def test_total_trailing_garbage_is_unsettleable():
 
 def test_btts_trailing_garbage_is_unsettleable():
     assert grade_leg("Both Teams To Score", "Yes please", O) == "unsettleable"
+
+
+def test_grade_score_matches_grade_leg_for_ft_markets():
+    # score core on (2,1) must equal the FT grade_leg behaviour
+    assert _grade_score("1x2", "1", 2, 1) == "won"
+    assert _grade_score("total", "Over 2.5", 2, 1) == "won"
+    assert _grade_score("total", "Over 3", 2, 1) == "void"
+    assert _grade_score("correct score", "2:1", 2, 1) == "won"
+    assert _grade_score("multigoals", "1-3", 2, 1) == "won"
+    assert _grade_score("handicap", "2 (+1.5)", 2, 1) == "won"
+
+
+def test_double_chance_all_notations():
+    for sel in ("1 or draw", "1X", "1/X"):
+        assert _grade_score("double chance", sel, 2, 1) == "won"   # home win covers 1X
+    for sel in ("1 or 2", "12", "1/2"):
+        assert _grade_score("double chance", sel, 2, 1) == "won"
+    for sel in ("draw or 2", "X2", "x/2"):
+        assert _grade_score("double chance", sel, 2, 1) == "lost"
+
+
+def test_team_total_and_clean_sheet_and_oddeven():
+    assert _grade_score("1 total", "Over 1.5", 2, 1) == "won"      # home scored 2 > 1.5
+    assert _grade_score("2 total", "Under 0.5", 2, 1) == "lost"    # away scored 1
+    assert _grade_score("2 clean sheet", "No", 2, 1) == "won"      # away conceded 2 -> not clean
+    assert _grade_score("1 clean sheet", "Yes", 2, 0) == "won"     # away scored 0 -> home clean
+    assert _grade_score("odd/even", "Odd", 2, 1) == "won"          # 3 total -> odd
+    assert _grade_score("2 odd/even", "Even", 2, 2) == "won"       # away 2 -> even
+
+
+def test_grade_score_unknown_is_unsettleable():
+    assert _grade_score("total corners", "Over 8.5", 2, 1) == "unsettleable"
+    # NOTE: "1x2" does plain string equality (sel == res), not regex validation like
+    # total/btts/handicap, so a garbage selection is "lost" not "unsettleable" -- this
+    # is pre-existing behaviour, unchanged by this refactor (see task-1-report.md).
+    assert _grade_score("1x2", "banana", 2, 1) == "lost"
