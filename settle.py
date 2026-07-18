@@ -177,6 +177,16 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
         sparts = [p.strip() for p in re.split(r"\s+&\s+", sel)]
         if len(mparts) != len(sparts) or len(mparts) < 2:
             return "unsettleable"
+        # a half prefix on the first component applies to the whole combo: distribute it onto
+        # later components that don't already carry their own half designation (fix for combos
+        # like "2nd half - double chance & both teams to score" grading the tail on full time)
+        pref = re.match(r"(1st|2nd|first|second)\s*half\s*-\s*", mparts[0], re.IGNORECASE)
+        if pref:
+            head = mparts[0][:pref.end()]                      # e.g. "2nd half - "
+            mparts = [mparts[0]] + [
+                mp if re.match(r"(1st|2nd|first|second)\s*half", mp, re.IGNORECASE) else head + mp
+                for mp in mparts[1:]
+            ]
         return _combine([grade_leg(mp, sp, o) for mp, sp in zip(mparts, sparts)])
 
     # "1st/2nd half both teams to score": selection "X/Y" = 1st-half BTTS / 2nd-half BTTS
@@ -188,10 +198,12 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
         v2 = _grade_on_half(o, "2nd", "both teams to score", parts[1])
         return _combine([v1, v2])
 
-    # half markets: "1st half - <core>" / "2nd half - <core>" (or without the dash, inside combos)
-    hm = re.match(r"(1st|2nd)\s*half\s*-?\s*(.*)$", low)
+    # half markets: "1st half - <core>" / "2nd half - <core>" (or without the dash, inside combos);
+    # also accepts word forms "First half" / "Second half" seen in real data
+    hm = re.match(r"(1st|2nd|first|second)\s*half\s*-?\s*(.*)$", low)
     if hm and hm.group(2):
-        return _grade_on_half(o, hm.group(1), hm.group(2).strip(), sel)
+        which = {"first": "1st", "second": "2nd"}.get(hm.group(1), hm.group(1))
+        return _grade_on_half(o, which, hm.group(2).strip(), sel)
 
     if UNSETTLEABLE.search(name):
         return "unsettleable"

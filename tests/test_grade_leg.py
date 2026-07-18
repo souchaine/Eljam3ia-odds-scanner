@@ -190,3 +190,20 @@ def test_ft_subtypes_through_grade_leg():
     assert grade_leg("2 Clean sheet", "No", MatchOutcome("x", 2, 1)) == "won"
     # 3 goals -> odd; only reachable now that the regex no longer blanket-catches odd/even
     assert grade_leg("Odd/Even", "Odd", MatchOutcome("x", 2, 1)) == "won"
+
+
+def test_half_prefix_distributes_over_combo():
+    o = MatchOutcome("x", 1, 1, ht_home=0, ht_away=1)   # 2nd half = 1-0
+    assert grade_leg("2nd half - double chance & both teams to score", "12 & no", o) == "won"
+
+
+def test_word_form_half_market():
+    o = MatchOutcome("x", 2, 1, ht_home=1, ht_away=0)   # 1st half = 1-0
+    assert grade_leg("First half - multigoals", "1-3", o) == "won"      # 1 HT goal
+    assert grade_leg("Second half - total", "Over 0.5", o) == "won"     # 2nd half = 1-1 -> 2 goals
+
+
+def test_three_part_combo():
+    o = MatchOutcome("x", 2, 1)     # FT 2-1
+    assert grade_leg("1x2 & total & both teams to score", "1 & over 2.5 & yes", o) == "won"
+    assert grade_leg("1x2 & total & both teams to score", "1 & under 2.5 & yes", o) == "lost"
