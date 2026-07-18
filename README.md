@@ -109,9 +109,7 @@ Notes on the matrix:
 
 `settle.py` grades a run's betslips against a hand-entered scores CSV
 (`match,home,away[,ht_home,ht_away]`), prints the two trackers (SET A 0..50, SET B 0..25 — winning
-slips), and appends per-slip rows to `output/backtest.csv`. v1 grades full-time score markets (1x2,
-totals, BTTS, double chance, correct score, multigoals, draw-no-bet, handicap); corners/cards/shots
-and half-split markets show as *ungradeable* until a stats provider is added. Booking-code
+slips), and appends per-slip rows to `output/backtest.csv`. Grades full-time AND half markets (1st/2nd-half goals, multigoals, totals, 1x2, double chance, BTTS, clean sheet, odd/even) and `A & B` combos of those — all derived from the HT+FT score (add `ht_home,ht_away` columns to the scores CSV to unlock half markets). Stat markets (corners/cards/bookings/shots/saves/fouls) and event markets (first-/last-goal, penalty) still need a stats provider and show as *ungradeable*. A slip is gradeable only if all its legs are, so slips carrying stat legs stay ungradeable until a provider is added. Booking-code
 accumulators of 20 legs win ~never, so trackers read near zero — the backtest is for measuring, not
 a target.
 
