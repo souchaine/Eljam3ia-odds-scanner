@@ -37,6 +37,20 @@ _DC_PAIRS = {
 }
 
 
+def _multigoals_hit(sel: str, goals: int) -> str | None:
+    """Grade a multigoals bucket. Forms: "N-M", "N+", "No goal". None if unparseable."""
+    s = sel.strip()
+    if re.fullmatch(r"no\s+goal", s, re.IGNORECASE):
+        return "won" if goals == 0 else "lost"
+    m = re.fullmatch(r"(\d+)\s*\+", s)
+    if m:
+        return "won" if goals >= int(m.group(1)) else "lost"
+    m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", s)
+    if m:
+        return "won" if int(m.group(1)) <= goals <= int(m.group(2)) else "lost"
+    return None
+
+
 def _grade_score(key: str, sel: str, home: int, away: int) -> str:
     """Grade a score-derivable market on a goal pair. Returns won|lost|void|unsettleable."""
     total = home + away
@@ -83,10 +97,12 @@ def _grade_score(key: str, sel: str, home: int, away: int) -> str:
         return "won" if (int(m.group(1)), int(m.group(2))) == (home, away) else "lost"
 
     if key == "multigoals":
-        m = re.match(r"\s*(\d+)\s*-\s*(\d+)\s*$", sel)
-        if not m:
-            return "unsettleable"
-        return "won" if int(m.group(1)) <= total <= int(m.group(2)) else "lost"
+        v = _multigoals_hit(sel, total)
+        return v if v is not None else "unsettleable"
+
+    if key in ("1 multigoals", "2 multigoals"):
+        v = _multigoals_hit(sel, home if key.startswith("1") else away)
+        return v if v is not None else "unsettleable"
 
     if key == "draw no bet":
         if res == "Draw":
@@ -120,6 +136,34 @@ def _grade_score(key: str, sel: str, home: int, away: int) -> str:
         is_odd = n % 2 == 1
         return "won" if is_odd == (m.group(1).lower() == "odd") else "lost"
 
+    m = re.fullmatch(r"([12])\s+exact\s+goals", key)
+    if m:
+        if not re.fullmatch(r"\d+", sel.strip()):
+            return "unsettleable"
+        goals = home if m.group(1) == "1" else away
+        return "won" if goals == int(sel.strip()) else "lost"
+
+    m = re.fullmatch(r"([12])\s+to\s+score", key)
+    if m:
+        y = re.fullmatch(r"\s*(yes|no)\s*", sel, re.IGNORECASE)
+        if not y:
+            return "unsettleable"
+        goals = home if m.group(1) == "1" else away
+        return "won" if (goals > 0) == (y.group(1).lower() == "yes") else "lost"
+
+    if key == "handicap 1x2":
+        # Gate 2: (a:b) = home-start:away-start; leading token = bet side; NO void (Draw is a
+        # real selection, each line is its own 3-way market).
+        m = re.fullmatch(r"\s*(1|2|draw|x)\s*\(\s*(\d+)\s*:\s*(\d+)\s*\)\s*", sel, re.IGNORECASE)
+        if not m:
+            return "unsettleable"
+        side = m.group(1).lower()
+        side = "Draw" if side in ("draw", "x") else side
+        h = home + int(m.group(2))
+        a = away + int(m.group(3))
+        res = "1" if h > a else ("2" if a > h else "Draw")
+        return "won" if res == side else "lost"
+
     return "unsettleable"
 
 
@@ -130,6 +174,35 @@ def _half_score(o: MatchOutcome, which: str) -> tuple[int, int] | None:
     if which == "1st":
         return (o.ht_home, o.ht_away)
     return (o.home - o.ht_home, o.away - o.ht_away)   # 2nd half
+
+
+def _grade_htft(o: MatchOutcome, sel: str, dc: bool = False) -> str:
+    """Grade Halftime/fulltime ("1/1") or DC Halftime/DC Fulltime ("X2/X2").
+
+    Needs BOTH halves, so it cannot live in _grade_score. FT is cumulative (Gate 3).
+    """
+    if o.ht_home is None or o.ht_away is None:
+        return "unsettleable"
+    parts = [p.strip() for p in sel.split("/")]
+    if len(parts) != 2:
+        return "unsettleable"
+    picks = parts
+    ht_res = "1" if o.ht_home > o.ht_away else ("2" if o.ht_away > o.ht_home else "Draw")
+    ft_res = "1" if o.home > o.away else ("2" if o.away > o.home else "Draw")
+    for pick, res in zip(picks, (ht_res, ft_res)):
+        if dc:
+            allowed = _DC_PAIRS.get(pick.lower())
+            if allowed is None:
+                return "unsettleable"
+            if res not in allowed:
+                return "lost"
+        else:
+            want = {"1": "1", "2": "2", "x": "Draw", "draw": "Draw"}.get(pick.lower())
+            if want is None:
+                return "unsettleable"
+            if res != want:
+                return "lost"
+    return "won"
 
 
 def _score_key(name: str) -> str:
@@ -188,6 +261,11 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
                 for mp in mparts[1:]
             ]
         return _combine([grade_leg(mp, sp, o) for mp, sp in zip(mparts, sparts)])
+
+    if low in ("halftime/fulltime", "half time/full time"):
+        return _grade_htft(o, sel)
+    if re.fullmatch(r"dc\s*halftime\s*/\s*dc\s*fulltime", low):
+        return _grade_htft(o, sel, dc=True)
 
     # "1st/2nd half both teams to score": selection "X/Y" = 1st-half BTTS / 2nd-half BTTS
     if low == "1st/2nd half both teams to score":

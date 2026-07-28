@@ -207,3 +207,86 @@ def test_three_part_combo():
     o = MatchOutcome("x", 2, 1)     # FT 2-1
     assert grade_leg("1x2 & total & both teams to score", "1 & over 2.5 & yes", o) == "won"
     assert grade_leg("1x2 & total & both teams to score", "1 & under 2.5 & yes", o) == "lost"
+
+
+HTFT = MatchOutcome("A vs. B", 2, 1, ht_home=1, ht_away=0)   # FT 2-1, HT 1-0, 2nd half 1-1
+
+
+def test_team_multigoals_all_three_selection_forms():
+    o = MatchOutcome("x", 3, 0)
+    assert grade_leg("1 multigoals", "1-3", o) == "won"      # home 3 in [1,3]
+    assert grade_leg("1 multigoals", "1-2", o) == "lost"
+    assert grade_leg("2 multigoals", "No goal", o) == "won"  # away scored 0
+    assert grade_leg("1 multigoals", "No goal", o) == "lost"
+    assert grade_leg("1 multigoals", "3+", o) == "won"       # home 3 >= 3
+    assert grade_leg("1 multigoals", "4+", o) == "lost"
+    assert grade_leg("1 multigoals", "banana", o) == "unsettleable"
+
+
+def test_plain_multigoals_gains_open_ended_and_no_goal():
+    o = MatchOutcome("x", 3, 1)                              # 4 total
+    assert grade_leg("Multigoals", "4+", o) == "won"
+    assert grade_leg("Multigoals", "5+", o) == "lost"
+    assert grade_leg("Multigoals", "No goal", MatchOutcome("x", 0, 0)) == "won"
+    assert grade_leg("Multigoals", "1-3", o) == "lost"       # existing form still works
+
+
+def test_team_exact_goals_and_to_score_on_half():
+    assert grade_leg("1st half - 1 exact goals", "1", HTFT) == "won"   # home 1 at HT
+    assert grade_leg("1st half - 2 exact goals", "0", HTFT) == "won"   # away 0 at HT
+    assert grade_leg("1st half - 2 exact goals", "1", HTFT) == "lost"
+    assert grade_leg("1st half - 2 to score", "No", HTFT) == "won"     # away didn't score in H1
+    assert grade_leg("1st half - 1 to score", "Yes", HTFT) == "won"
+
+
+def test_handicap_1x2_direction_and_no_void():
+    o = MatchOutcome("x", 2, 1)
+    # (a:b) = home-start : away-start; leading token = bet side
+    assert grade_leg("Handicap 1x2", "1 (1:0)", o) == "won"    # adj 3-1 -> 1
+    assert grade_leg("Handicap 1x2", "2 (0:1)", o) == "lost"   # adj 2-2 -> Draw, so "2" loses
+    assert grade_leg("Handicap 1x2", "2 (0:2)", o) == "won"    # adj 2-3 -> 2
+    # equality is a Draw WIN, never a void (Gate 2)
+    assert grade_leg("Handicap 1x2", "Draw (0:1)", o) == "won"  # adj 2-2 -> Draw
+    assert grade_leg("Handicap 1x2", "1 (0:1)", o) == "lost"
+
+
+def test_handicap_1x2_never_voids_unlike_asian_handicap():
+    o = MatchOutcome("x", 2, 1)
+    assert grade_leg("Handicap 1x2", "1 (0:1)", o) != "void"
+    assert grade_leg("Handicap", "2 (+1)", o) == "void"        # existing Asian market unchanged
+
+
+def test_handicap_1x2_on_half():
+    # 2nd half = 1-1; "1 (1:0)" -> adj 2-1 -> 1 -> won
+    assert grade_leg("2nd half - handicap 1X2", "1 (1:0)", HTFT) == "won"
+    assert grade_leg("2nd half - handicap 1X2", "2 (0:1)", HTFT) == "won"   # adj 1-2 -> 2
+
+
+def test_htft_uses_cumulative_ft():
+    # Gate 3: FT is cumulative. HT result 1, FT result 1 -> "1/1" won.
+    # If FT were treated as 2nd-half-only (1,1) the FT result would be Draw -> lost.
+    assert grade_leg("Halftime/fulltime", "1/1", HTFT) == "won"
+    assert grade_leg("Halftime/fulltime", "1/X", HTFT) == "lost"
+    assert grade_leg("Halftime/fulltime", "X/1", HTFT) == "lost"
+
+
+def test_htft_dc_variant_and_missing_ht():
+    o = MatchOutcome("x", 1, 2, ht_home=0, ht_away=1)   # HT 0-1 (away), FT 1-2 (away)
+    assert grade_leg("DC Halftime/ DC Fulltime", "X2/X2", o) == "won"
+    assert grade_leg("DC Halftime/ DC Fulltime", "1X/1X", o) == "lost"
+    assert grade_leg("Halftime/fulltime", "1/1", MatchOutcome("x", 2, 1)) == "unsettleable"
+
+
+def test_htft_total_combo_recurses():
+    # combo wrapper already splits on " & "; each side graded independently
+    assert grade_leg("Halftime/fulltime & total 2.5", "1/1 & over 2.5", HTFT) == "won"
+    assert grade_leg("Halftime/fulltime & total 6.5", "1/1 & over 6.5", HTFT) == "lost"
+
+
+def test_out_of_scope_markets_stay_unsettleable():
+    for m, s in [("Shots - Neymar", "Over 0.5"), ("Saves goalkeeper (Jandrei)", "Over 2.5"),
+                 ("To score or assist Neymar", "Over 0.5"), ("Total corners", "Over 8.5"),
+                 ("Race to 5 corners", "1"), ("First scoring type", "Goal"),
+                 ("A penalty in the match", "Yes"), ("Corner 1x2", "1 (1:0)"),
+                 ("15 minutes - 1x2 from 0:00 to 14:59", "1"), ("Both halves over 1.5", "No")]:
+        assert grade_leg(m, s, HTFT) == "unsettleable", m
