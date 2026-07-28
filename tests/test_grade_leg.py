@@ -290,3 +290,45 @@ def test_out_of_scope_markets_stay_unsettleable():
                  ("A penalty in the match", "Yes"), ("Corner 1x2", "1 (1:0)"),
                  ("15 minutes - 1x2 from 0:00 to 14:59", "1"), ("Both halves over 1.5", "No")]:
         assert grade_leg(m, s, HTFT) == "unsettleable", m
+
+
+def test_simple_or_market_carries_both_legs():
+    o = MatchOutcome("x", 2, 1)                       # home win, 3 goals, no clean sheet
+    assert grade_leg("Draw or under 1.5", "Yes", o) == "lost"   # neither
+    assert grade_leg("1 or under 1.5", "Yes", o) == "won"       # home win satisfies
+    assert grade_leg("Draw or over 2.5", "Yes", o) == "won"     # 3 > 2.5 satisfies
+    assert grade_leg("2 or over 2.5", "Yes", o) == "won"
+
+
+def test_simple_or_handles_no_as_negation():
+    o = MatchOutcome("x", 2, 1)
+    assert grade_leg("1 or under 1.5", "No", o) == "lost"       # OR is true -> "No" loses
+    assert grade_leg("Draw or under 1.5", "No", o) == "won"     # OR is false -> "No" wins
+
+
+def test_or_any_clean_sheet():
+    assert grade_leg("2 or any clean sheet", "Yes", MatchOutcome("x", 2, 0)) == "won"   # home clean
+    assert grade_leg("1 or any clean sheet", "Yes", MatchOutcome("x", 0, 2)) == "won"   # away clean
+    assert grade_leg("Draw or any clean sheet", "Yes", MatchOutcome("x", 2, 1)) == "lost"
+
+
+def test_or_both_teams_to_score():
+    assert grade_leg("1 or both teams to score", "Yes", MatchOutcome("x", 2, 1)) == "won"
+    assert grade_leg("2 or both teams to score", "Yes", MatchOutcome("x", 2, 0)) == "lost"
+
+
+def test_compound_or_binds_selection_tokens_by_type_not_position():
+    # market: "Both team to score or Total 2.5"; selection: "Under 2.5 or no"
+    # NOTE the selection order is REVERSED vs the market name. Positional pairing would try to
+    # grade BTTS with "Under 2.5" and Total with "no" -> must bind by TYPE.
+    o = MatchOutcome("x", 1, 0)                        # 1 goal, BTTS no
+    assert grade_leg("Both team to score or Total 2.5", "Under 2.5 or no", o) == "won"
+    o2 = MatchOutcome("x", 2, 1)                       # 3 goals (over 2.5), BTTS yes
+    assert grade_leg("Both team to score or Total 2.5", "Under 2.5 or no", o2) == "lost"
+    assert grade_leg("Both team to score or Total 2.5", "Over 2.5 or yes", o2) == "won"
+
+
+def test_or_combo_malformed_is_unsettleable():
+    o = MatchOutcome("x", 2, 1)
+    assert grade_leg("Draw or under 1.5", "banana", o) == "unsettleable"
+    assert grade_leg("1 or total corners", "Yes", o) == "unsettleable"   # stat component

@@ -5,6 +5,7 @@ def test_market_family_classifies_known_families():
     assert _market_family("1x2") == "main"
     assert _market_family("Double chance") == "main"
     assert _market_family("1st half - multigoals") == "1st half"
+    assert _market_family("1st half corners") == "corners"        # stat-before-period rule
     assert _market_family("2nd half - handicap 1X2") == "2nd half"
     assert _market_family("Total corners") == "corners"
     assert _market_family("Total bookings") == "cards"
