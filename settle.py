@@ -167,6 +167,36 @@ def _grade_score(key: str, sel: str, home: int, away: int) -> str:
     return "unsettleable"
 
 
+# family classification for per-family hit-rate reporting. Order matters: the first match
+# wins, so stat/player families are checked before the period families. multigoals sits AFTER
+# the period families (not in the brief's original position) so a period-prefixed market like
+# "1st half - multigoals" reports as "1st half", not "multigoals" — see task-2-report.md.
+_FAMILIES = [
+    ("player",     r"shots?\s*-|shots on goal\s*-|saves goalkeeper|to score or assist"),
+    ("corners",    r"corner"),
+    ("cards",      r"booking|card"),
+    ("stat-other", r"\bshots?\b|tackle|offside|foul|penalty in the match|scoring type"),
+    ("interval",   r"\d+\s*minutes\s*-"),
+    ("htft",       r"halftime\s*/\s*fulltime|dc\s*halftime"),
+    ("combo",      r" & "),
+    ("or-combo",   r"\bor\b"),
+    ("1st half",   r"1st\s*half|first\s*half"),
+    ("2nd half",   r"2nd\s*half|second\s*half"),
+    ("multigoals", r"multigoals"),
+    ("main",       r"^(1x2|total|both teams to score|double chance|correct score|"
+                   r"draw no bet|handicap|handicap 1x2|[12] (total|clean sheet|odd/even)|odd/even)"),
+]
+
+
+def _market_family(market: str) -> str:
+    """Classify a market into a reporting family. Unanticipated markets land in 'other'."""
+    name = str(market or "").strip().lower()
+    for fam, pat in _FAMILIES:
+        if re.search(pat, name):
+            return fam
+    return "other"
+
+
 def _half_score(o: MatchOutcome, which: str) -> tuple[int, int] | None:
     """(home, away) goals in the given half, or None if half-time score is unknown."""
     if o.ht_home is None or o.ht_away is None:
@@ -381,6 +411,7 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
     tally = {"A": {"won": 0, "gradeable": 0, "total": 0},
              "B": {"won": 0, "gradeable": 0, "total": 0}}
     verdicts = []
+    families: dict[str, dict[str, int]] = {}
     for slip in slips:
         st = slip["set"] if slip["set"] in tally else "A"
         tally[st]["total"] += 1
@@ -393,7 +424,15 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
             if verdict == "won":
                 tally[st]["won"] += 1
         verdicts.append((slip["label"], verdict, len(slip["legs"]), won_legs, gradeable_legs))
-    return {**tally, "verdicts": verdicts}
+        for leg, v in zip(slip["legs"], lv):
+            f = families.setdefault(_market_family(leg["market"]),
+                                    {"n": 0, "gradeable": 0, "won": 0})
+            f["n"] += 1
+            if v != "unsettleable":
+                f["gradeable"] += 1
+                if v == "won":
+                    f["won"] += 1
+    return {**tally, "verdicts": verdicts, "families": families}
 
 
 class ResultsSource(Protocol):
@@ -445,6 +484,7 @@ def main() -> int:
     outcomes = read_outcomes_csv(opath.read_text(encoding="utf-8-sig"))
     result = settle_run(slips, outcomes)
 
+    print("Slip trackers (diagnostic only — a 20-leg parlay is near-information-free):")
     for st, cap in (("A", 50), ("B", 25)):
         t = result[st]
         print(f"SET {st}: {t['won']}/{t['gradeable']} gradeable won "
@@ -452,6 +492,13 @@ def main() -> int:
     ungr = sum(1 for _l, v, _n, _w, _g in result["verdicts"] if v == "ungradeable")
     if ungr:
         print(f"  ({ungr} slip(s) ungradeable — stat/half legs or missing scores)")
+
+    print("\nPer-family leg hit rate (no blended aggregate — the gradeable subset is a biased sample):")
+    print(f"  {'family':<12} {'n':>5} {'gradeable':>10} {'won':>5}  hit%")
+    for fam in sorted(result["families"], key=lambda k: -result["families"][k]["n"]):
+        f = result["families"][fam]
+        hit = f"{100 * f['won'] / f['gradeable']:.0f}%" if f["gradeable"] else "  -"
+        print(f"  {fam:<12} {f['n']:>5} {f['gradeable']:>10} {f['won']:>5}  {hit:>4}")
 
     backtest = Path(args.backtest)
     backtest.parent.mkdir(parents=True, exist_ok=True)
