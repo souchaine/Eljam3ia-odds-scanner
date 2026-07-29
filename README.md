@@ -108,10 +108,9 @@ Notes on the matrix:
 ## Settlement / backtest
 
 `settle.py` grades a run's betslips against a hand-entered scores CSV
-(`match,home,away[,ht_home,ht_away]`), prints the two trackers (SET A 0..50, SET B 0..25 — winning
-slips), and appends per-slip rows to `output/backtest.csv`. Grades full-time AND half markets (1st/2nd-half goals, multigoals, totals, 1x2, double chance, BTTS, clean sheet, odd/even) and `A & B` combos of those — all derived from the HT+FT score (add `ht_home,ht_away` columns to the scores CSV to unlock half markets). Stat markets (corners/cards/bookings/shots/saves/fouls) and event markets (first-/last-goal, penalty) still need a stats provider and show as *ungradeable*. A slip is gradeable only if all its legs are, so slips carrying stat legs stay ungradeable until a provider is added. Booking-code
-accumulators of 20 legs win ~never, so trackers read near zero — the backtest is for measuring, not
-a target.
+(`match,home,away[,ht_home,ht_away]`) and appends per-slip rows to `output/backtest.csv`. Grades full-time AND half markets (1st/2nd-half goals, multigoals, totals, 1x2, double chance, BTTS, clean sheet, odd/even), team multigoals (`N-M`/`N+`/`No goal`), team exact goals, team to score, 3-way handicap, HT/FT (including DC variant), and `A & B` combos of those — all derived from the HT+FT score (add `ht_home,ht_away` to the scores CSV to unlock half markets). OR-combos (simple and compound) grade via type-bound selection matching. Settlement output reports per market family (n/gradeable/won); there is deliberately no blended aggregate since the gradeable subset is a biased sample of leg types. Stat markets (corners/cards/bookings/shots/saves/fouls) and event markets (first-/last-goal, penalty) still need a stats provider and show as *ungradeable*, and a slip is gradeable only if all its legs
+are — so slips carrying stat legs stay ungradeable until a provider is added. The slip-level tracker
+is diagnostic only — a 20-leg parlay is near-information-free.
 
 ```
 py settle.py output/run_YYYYMMDD_HHMM/betslips_*.txt --outcomes scores.csv --backtest output/backtest.csv

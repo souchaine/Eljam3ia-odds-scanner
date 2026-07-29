@@ -37,6 +37,20 @@ _DC_PAIRS = {
 }
 
 
+def _multigoals_hit(sel: str, goals: int) -> str | None:
+    """Grade a multigoals bucket. Forms: "N-M", "N+", "No goal". None if unparseable."""
+    s = sel.strip()
+    if re.fullmatch(r"no\s+goal", s, re.IGNORECASE):
+        return "won" if goals == 0 else "lost"
+    m = re.fullmatch(r"(\d+)\s*\+", s)
+    if m:
+        return "won" if goals >= int(m.group(1)) else "lost"
+    m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", s)
+    if m:
+        return "won" if int(m.group(1)) <= goals <= int(m.group(2)) else "lost"
+    return None
+
+
 def _grade_score(key: str, sel: str, home: int, away: int) -> str:
     """Grade a score-derivable market on a goal pair. Returns won|lost|void|unsettleable."""
     total = home + away
@@ -83,10 +97,12 @@ def _grade_score(key: str, sel: str, home: int, away: int) -> str:
         return "won" if (int(m.group(1)), int(m.group(2))) == (home, away) else "lost"
 
     if key == "multigoals":
-        m = re.match(r"\s*(\d+)\s*-\s*(\d+)\s*$", sel)
-        if not m:
-            return "unsettleable"
-        return "won" if int(m.group(1)) <= total <= int(m.group(2)) else "lost"
+        v = _multigoals_hit(sel, total)
+        return v if v is not None else "unsettleable"
+
+    if key in ("1 multigoals", "2 multigoals"):
+        v = _multigoals_hit(sel, home if key.startswith("1") else away)
+        return v if v is not None else "unsettleable"
 
     if key == "draw no bet":
         if res == "Draw":
@@ -120,7 +136,78 @@ def _grade_score(key: str, sel: str, home: int, away: int) -> str:
         is_odd = n % 2 == 1
         return "won" if is_odd == (m.group(1).lower() == "odd") else "lost"
 
+    m = re.fullmatch(r"([12])\s+exact\s+goals", key)
+    if m:
+        if not re.fullmatch(r"\d+", sel.strip()):
+            return "unsettleable"
+        goals = home if m.group(1) == "1" else away
+        return "won" if goals == int(sel.strip()) else "lost"
+
+    m = re.fullmatch(r"([12])\s+to\s+score", key)
+    if m:
+        y = re.fullmatch(r"\s*(yes|no)\s*", sel, re.IGNORECASE)
+        if not y:
+            return "unsettleable"
+        goals = home if m.group(1) == "1" else away
+        return "won" if (goals > 0) == (y.group(1).lower() == "yes") else "lost"
+
+    if key == "handicap 1x2":
+        # Gate 2: (a:b) = home-start:away-start; leading token = bet side; NO void (Draw is a
+        # real selection, each line is its own 3-way market).
+        m = re.fullmatch(r"\s*(1|2|draw|x)\s*\(\s*(\d+)\s*:\s*(\d+)\s*\)\s*", sel, re.IGNORECASE)
+        if not m:
+            return "unsettleable"
+        side = m.group(1).lower()
+        side = "Draw" if side in ("draw", "x") else side
+        h = home + int(m.group(2))
+        a = away + int(m.group(3))
+        res = "1" if h > a else ("2" if a > h else "Draw")
+        return "won" if res == side else "lost"
+
+    if key == "any clean sheet":
+        y = re.fullmatch(r"\s*(yes|no)\s*", sel, re.IGNORECASE)
+        if not y:
+            return "unsettleable"
+        anyclean = home == 0 or away == 0
+        return "won" if anyclean == (y.group(1).lower() == "yes") else "lost"
+
     return "unsettleable"
+
+
+# family classification for per-family hit-rate reporting. Order matters: the first match wins.
+#   1. stat/player families are checked BEFORE the period families, so a stat market that also
+#      names a period -- "1st half corners" -- reports as "corners", not "1st half".
+#   2. multigoals is checked AFTER the period families, so a period-prefixed market --
+#      "1st half - multigoals" -- reports as "1st half", not "multigoals".
+#   3. htft is checked BEFORE combo, so a market that is itself a combo of an HT/FT leg with
+#      something else -- "Halftime/fulltime & total X" -- files as "htft", while an ordinary
+#      combo that doesn't involve HT/FT -- "Double chance & total X" -- files as "combo".
+_FAMILIES = [
+    ("player",     r"shots?\s*-|shots on goal\s*-|saves goalkeeper|to score or assist|"
+                   r"goalscorer or the substitute"),
+    ("corners",    r"corner"),
+    ("cards",      r"booking|card"),
+    ("stat-other", r"\bshots?\b|tackle|offside|foul|penalty in the match|scoring type"),
+    ("interval",   r"\d+\s*minutes\s*-"),
+    ("htft",       r"half\s*time\s*/\s*full\s*time|dc\s*halftime"),
+    ("combo",      r" & "),
+    ("or-combo",   r"\bor\b"),
+    ("both halves", r"1st\s*/\s*2nd\s*half|both halves"),
+    ("1st half",   r"1st\s*half|first\s*half"),
+    ("2nd half",   r"2nd\s*half|second\s*half"),
+    ("multigoals", r"multigoals"),
+    ("main",       r"^(1x2|total|both teams to score|double chance|correct score|"
+                   r"draw no bet|handicap|handicap 1x2|[12] (total|clean sheet|odd/even)|odd/even)"),
+]
+
+
+def _market_family(market: str) -> str:
+    """Classify a market into a reporting family. Unanticipated markets land in 'other'."""
+    name = str(market or "").strip().lower()
+    for fam, pat in _FAMILIES:
+        if re.search(pat, name):
+            return fam
+    return "other"
 
 
 def _half_score(o: MatchOutcome, which: str) -> tuple[int, int] | None:
@@ -130,6 +217,35 @@ def _half_score(o: MatchOutcome, which: str) -> tuple[int, int] | None:
     if which == "1st":
         return (o.ht_home, o.ht_away)
     return (o.home - o.ht_home, o.away - o.ht_away)   # 2nd half
+
+
+def _grade_htft(o: MatchOutcome, sel: str, dc: bool = False) -> str:
+    """Grade Halftime/fulltime ("1/1") or DC Halftime/DC Fulltime ("X2/X2").
+
+    Needs BOTH halves, so it cannot live in _grade_score. FT is cumulative (Gate 3).
+    """
+    if o.ht_home is None or o.ht_away is None:
+        return "unsettleable"
+    parts = [p.strip() for p in sel.split("/")]
+    if len(parts) != 2:
+        return "unsettleable"
+    ht_res = "1" if o.ht_home > o.ht_away else ("2" if o.ht_away > o.ht_home else "Draw")
+    ft_res = "1" if o.home > o.away else ("2" if o.away > o.home else "Draw")
+    # Validate BOTH picks first -- resolve each to its allowed result(s) before comparing either
+    # against the scoreline. Deciding ("lost") on the first pick before the second is validated
+    # made the same unparseable selection grade "lost" or "unsettleable" depending on the score
+    # (governing principle: never emit a verdict while a sibling token is unparsed).
+    if dc:
+        allowed_pair = [_DC_PAIRS.get(pick.lower()) for pick in parts]
+        if any(a is None for a in allowed_pair):
+            return "unsettleable"
+        hits = [res in allowed for allowed, res in zip(allowed_pair, (ht_res, ft_res))]
+    else:
+        wants = [{"1": "1", "2": "2", "x": "Draw", "draw": "Draw"}.get(pick.lower()) for pick in parts]
+        if any(w is None for w in wants):
+            return "unsettleable"
+        hits = [want == res for want, res in zip(wants, (ht_res, ft_res))]
+    return "won" if all(hits) else "lost"
 
 
 def _score_key(name: str) -> str:
@@ -165,6 +281,140 @@ def _combine(verdicts: list[str]) -> str:
     return "won"
 
 
+_OR_SPLIT = re.compile(r"\s+or\s+", re.IGNORECASE)
+
+
+def _take(tokens: list[str], pattern: str) -> str | None:
+    """Pop the first selection token matching pattern (type-binding, not positional)."""
+    for i, t in enumerate(tokens):
+        if re.fullmatch(pattern, t.strip(), re.IGNORECASE):
+            return tokens.pop(i).strip()
+    return None
+
+
+# Known OR-component forms, matched with re.fullmatch (whitelist, not substring/prefix) so that
+# any unanticipated variant -- e.g. "any clean sheet in the 1st half", "both team to score in
+# both halves" -- falls through to unsettleable instead of being graded on the full-time score.
+# The provider writes both "Both team to score" (singular) and "both teams to score" (plural).
+_OR_BOTH_TEAMS = re.compile(r"both teams?\s+to\s+score")
+_OR_ANY_CLEAN_SHEET = re.compile(r"any\s+clean\s+sheet")
+_OR_TOTAL = re.compile(r"total\s+\d+(?:\.\d+)?")
+
+
+def _or_component_verdict(part: str, o: MatchOutcome, tokens: list[str], bare: bool) -> str:
+    """Grade one OR component, consuming the selection token that matches it BY TYPE (not
+    position -- see the compound-OR hazard: selection order can be reversed vs the market name).
+
+    `bare` is True when the overall selection was a plain "Yes"/"No" wrapper (the simple-OR
+    family -- the market name alone carries both legs, so a component with no matching token
+    just evaluates its own condition as-is). When `bare` is False (the compound-OR family) every
+    token-needing component MUST find its own token; a miss is unsettleable, never a silent guess.
+
+    NOTE: the type-classification here (the _OR_BOTH_TEAMS / _OR_ANY_CLEAN_SHEET / _OR_TOTAL
+    fullmatch checks) is mirrored in `_or_component_pattern` below, which needs to know the SAME
+    token shape each component would consume in order to catch same-type ambiguity before any
+    token is consumed. If a new component type is added here, add a matching branch there too --
+    otherwise the ambiguity check silently falls through to None ("no collision risk") for the new
+    type, reopening a positional-guess hazard.
+    """
+    p = part.strip().lower()
+    if p in ("1", "2", "draw", "x"):                       # bare result token
+        return _grade_score("1x2", {"x": "Draw", "draw": "Draw"}.get(p, p), o.home, o.away)
+    if re.fullmatch(r"(over|under)\s+\d+(?:\.\d+)?", p):   # line carried in the market name
+        return _grade_score("total", p, o.home, o.away)
+    if _OR_ANY_CLEAN_SHEET.fullmatch(p):
+        tok = _take(tokens, r"yes|no")
+        if tok is None:
+            if not bare:
+                return "unsettleable"
+            tok = "Yes"
+        return _grade_score("any clean sheet", tok, o.home, o.away)
+    if _OR_BOTH_TEAMS.fullmatch(p):                        # both team(s) to score
+        tok = _take(tokens, r"yes|no")
+        if tok is None:
+            if not bare:
+                return "unsettleable"
+            tok = "Yes"
+        return _grade_score("both teams to score", tok, o.home, o.away)
+    if _OR_TOTAL.fullmatch(p):                             # "Total 2.5" -> line comes from a token
+        tok = _take(tokens, r"(over|under)\s+\d+(?:\.\d+)?")
+        return _grade_score("total", tok, o.home, o.away) if tok else "unsettleable"
+    return "unsettleable"
+
+
+def _or_component_pattern(part: str) -> str | None:
+    """The token pattern this OR component would consume via `_take`, or None if it's
+    self-contained (a bare 1x2 result, or a total line embedded in the market name itself).
+
+    Used by `_grade_or` to detect two components competing for the SAME token shape -- e.g. two
+    yes/no components -- before any token is actually consumed. When that happens there is no
+    type signal to bind by, `_take` would fall back to market order, and the observed provider
+    grammar reverses selection order relative to the market name, so a positional guess is likely
+    wrong. Per the governing principle (a mis-graded leg is worse than an ungraded one), that
+    ambiguity must be caught and returned as unsettleable rather than silently guessed.
+
+    NOTE: this duplicates `_or_component_verdict`'s type-classification (same fullmatch checks,
+    same hardcoded pattern literals) because it needs to know a component's token shape WITHOUT
+    consuming a token. The two are kept in sync by hand -- if a new component type is added to
+    `_or_component_verdict`, add a matching branch here too, or the ambiguity check will silently
+    fail to classify it (falls through to None = "no collision risk").
+    """
+    p = part.strip().lower()
+    if p in ("1", "2", "draw", "x"):
+        return None
+    if re.fullmatch(r"(over|under)\s+\d+(?:\.\d+)?", p):
+        return None
+    if _OR_ANY_CLEAN_SHEET.fullmatch(p) or _OR_BOTH_TEAMS.fullmatch(p):
+        return r"yes|no"
+    if _OR_TOTAL.fullmatch(p):
+        return r"(over|under)\s+\d+(?:\.\d+)?"
+    return None
+
+
+_HALF_PREFIX = re.compile(r"(1st|2nd|first|second)\s*half", re.IGNORECASE)
+
+
+def _grade_or(market: str, sel: str, o: MatchOutcome) -> str:
+    """Grade an "A or B" market. Selection is "Yes"/"No" (simple-OR), or per-component tokens
+    bound by type, not position (compound-OR)."""
+    if _HALF_PREFIX.match(market.strip()):
+        return "unsettleable"     # half-scoped OR markets are not in scope; don't grade on FT
+    if UNSETTLEABLE.search(market):
+        return "unsettleable"
+    parts = [p for p in _OR_SPLIT.split(market.strip()) if p.strip()]
+    if len(parts) != 2:
+        return "unsettleable"
+    # NOTE: there used to be a second, per-component _HALF_PREFIX check here, because the
+    # whole-market check above only anchors at position 0 and so misses a half-scope sitting on
+    # the SECOND component ("1 or 1st half both teams to score"). It's no longer needed: since
+    # _or_component_verdict/_or_component_pattern now WHITELIST known component forms via
+    # re.fullmatch (Fix 3) instead of substring-matching, a half-prefixed fragment like "1st half
+    # both teams to score" can no longer fullmatch _OR_BOTH_TEAMS (or any other known form) --
+    # the leading "1st half " text makes the fullmatch fail, so the component falls through to
+    # "unsettleable" on its own and the whole OR market is correctly rejected without help.
+    s = sel.strip()
+    yesno = re.fullmatch(r"(yes|no)", s, re.IGNORECASE)
+    if yesno:
+        tokens: list[str] = []
+    else:
+        tokens = [t for t in _OR_SPLIT.split(s) if t.strip()]
+        if len(tokens) != len(parts):          # malformed: neither a bare Yes/No nor one token
+            return "unsettleable"              # per component -- don't guess
+        patterns = [pat for pat in (_or_component_pattern(p) for p in parts) if pat is not None]
+        if len(patterns) != len(set(patterns)):
+            return "unsettleable"              # two components compete for the same token shape
+    verdicts = [_or_component_verdict(p, o, tokens, bare=bool(yesno)) for p in parts]
+    if tokens:                    # a selection token bound to nothing -> don't guess
+        return "unsettleable"
+    if any(v == "unsettleable" for v in verdicts):
+        return "unsettleable"
+    if any(v == "void" for v in verdicts):
+        return "unsettleable"     # push inside an OR -- settlement rule not defined yet
+    hit = any(v == "won" for v in verdicts)
+    want_yes = yesno.group(1).lower() == "yes" if yesno else True
+    return "won" if hit == want_yes else "lost"
+
+
 def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
     """Grade one leg from the full-time score. Returns won|lost|void|unsettleable."""
     name = str(market or "").strip()
@@ -189,6 +439,11 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
             ]
         return _combine([grade_leg(mp, sp, o) for mp, sp in zip(mparts, sparts)])
 
+    if low in ("halftime/fulltime", "half time/full time"):
+        return _grade_htft(o, sel)
+    if re.fullmatch(r"dc\s*halftime\s*/\s*dc\s*fulltime", low):
+        return _grade_htft(o, sel, dc=True)
+
     # "1st/2nd half both teams to score": selection "X/Y" = 1st-half BTTS / 2nd-half BTTS
     if low == "1st/2nd half both teams to score":
         parts = [p.strip() for p in sel.split("/")]
@@ -197,6 +452,12 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
         v1 = _grade_on_half(o, "1st", "both teams to score", parts[0])
         v2 = _grade_on_half(o, "2nd", "both teams to score", parts[1])
         return _combine([v1, v2])
+
+    # "A or B" markets (simple-OR: sel is Yes/No; compound-OR: sel carries per-component tokens,
+    # possibly in reversed order vs the market name -- _grade_or binds them by type). The combo
+    # branch above (" & " in low) already returns unconditionally, so " & " can never reach here.
+    if re.search(r"\s+or\s+", low):
+        return _grade_or(name, sel, o)
 
     # half markets: "1st half - <core>" / "2nd half - <core>" (or without the dash, inside combos);
     # also accepts word forms "First half" / "Second half" seen in real data
@@ -299,10 +560,17 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
     """Tally per-set trackers and per-slip verdicts.
 
     Each verdicts entry is (label, verdict, legs, won_legs, gradeable_legs).
+
+    Per-family `n` counts every leg occurrence (legs repeated across slips are counted once per
+    occurrence, so it's pseudo-replicated as an independent-sample size). `distinct` additionally
+    tracks the number of unique (match, market, selection) triples per family, so the hit-rate
+    table can show how much of `n` is actually independent signal.
     """
     tally = {"A": {"won": 0, "gradeable": 0, "total": 0},
              "B": {"won": 0, "gradeable": 0, "total": 0}}
     verdicts = []
+    families: dict[str, dict[str, int]] = {}
+    family_legs: dict[str, set[tuple[str, str, str]]] = {}
     for slip in slips:
         st = slip["set"] if slip["set"] in tally else "A"
         tally[st]["total"] += 1
@@ -315,7 +583,18 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
             if verdict == "won":
                 tally[st]["won"] += 1
         verdicts.append((slip["label"], verdict, len(slip["legs"]), won_legs, gradeable_legs))
-    return {**tally, "verdicts": verdicts}
+        for leg, v in zip(slip["legs"], lv):
+            fam = _market_family(leg["market"])
+            f = families.setdefault(fam, {"n": 0, "gradeable": 0, "won": 0, "distinct": 0})
+            f["n"] += 1
+            if v != "unsettleable":
+                f["gradeable"] += 1
+                if v == "won":
+                    f["won"] += 1
+            family_legs.setdefault(fam, set()).add((leg["match"], leg["market"], leg["selection"]))
+    for fam, legs in family_legs.items():
+        families[fam]["distinct"] = len(legs)
+    return {**tally, "verdicts": verdicts, "families": families}
 
 
 class ResultsSource(Protocol):
@@ -367,6 +646,7 @@ def main() -> int:
     outcomes = read_outcomes_csv(opath.read_text(encoding="utf-8-sig"))
     result = settle_run(slips, outcomes)
 
+    print("Slip trackers (diagnostic only — a 20-leg parlay is near-information-free):")
     for st, cap in (("A", 50), ("B", 25)):
         t = result[st]
         print(f"SET {st}: {t['won']}/{t['gradeable']} gradeable won "
@@ -374,6 +654,13 @@ def main() -> int:
     ungr = sum(1 for _l, v, _n, _w, _g in result["verdicts"] if v == "ungradeable")
     if ungr:
         print(f"  ({ungr} slip(s) ungradeable — stat/half legs or missing scores)")
+
+    print("\nPer-family leg hit rate (no blended aggregate — the gradeable subset is a biased sample):")
+    print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'gradeable':>10} {'won':>5}  hit%")
+    for fam in sorted(result["families"], key=lambda k: -result["families"][k]["n"]):
+        f = result["families"][fam]
+        hit = f"{100 * f['won'] / f['gradeable']:.0f}%" if f["gradeable"] else "  -"
+        print(f"  {fam:<12} {f['n']:>5} {f['distinct']:>8} {f['gradeable']:>10} {f['won']:>5}  {hit:>4}")
 
     backtest = Path(args.backtest)
     backtest.parent.mkdir(parents=True, exist_ok=True)
