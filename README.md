@@ -108,13 +108,44 @@ Notes on the matrix:
 ## Settlement / backtest
 
 `settle.py` grades a run's betslips against a hand-entered scores CSV
-(`match,home,away[,ht_home,ht_away]`) and appends per-slip rows to `output/backtest.csv`. Grades full-time AND half markets (1st/2nd-half goals, multigoals, totals, 1x2, double chance, BTTS, clean sheet, odd/even), team multigoals (`N-M`/`N+`/`No goal`), team exact goals, team to score, 3-way handicap, HT/FT (including DC variant), and `A & B` combos of those — all derived from the HT+FT score (add `ht_home,ht_away` to the scores CSV to unlock half markets). OR-combos (simple and compound) grade via type-bound selection matching. Settlement output reports per market family (n/gradeable/won); there is deliberately no blended aggregate since the gradeable subset is a biased sample of leg types. Stat markets (corners/cards/bookings/shots/saves/fouls) and event markets (first-/last-goal, penalty) still need a stats provider and show as *ungradeable*, and a slip is gradeable only if all its legs
+(`match,home,away[,ht_home,ht_away]`) and appends per-slip rows to `output/backtest.csv` plus one
+row per leg (family/odd/verdict) to `output/backtest_legs.csv`. Grades full-time AND half markets (1st/2nd-half goals, multigoals, totals, 1x2, double chance, BTTS, clean sheet, odd/even), team multigoals (`N-M`/`N+`/`No goal`), team exact goals, team to score, 3-way handicap, HT/FT (plain, DC, and mixed `DC Halftime/1X2 Fulltime`), the `both halves` family (over/under N per half, team to score in both halves, team to win both halves), and `A & B` combos of those — all derived from the HT+FT score (add `ht_home,ht_away` to the scores CSV to unlock half markets). OR-combos (simple and compound) grade via type-bound selection matching. Settlement output reports per market family (n/distinct/gradeable/won); there is deliberately no blended aggregate since the gradeable subset is a biased sample of leg types. Stat markets (corners/cards/bookings/shots/saves/fouls) and event markets (first-/last-goal, penalty) still need a stats provider and show as *ungradeable*, and a slip is gradeable only if all its legs
 are — so slips carrying stat legs stay ungradeable until a provider is added. The slip-level tracker
 is diagnostic only — a 20-leg parlay is near-information-free.
 
 ```
 py settle.py output/run_YYYYMMDD_HHMM/betslips_*.txt --outcomes scores.csv --backtest output/backtest.csv
 ```
+
+Entering scores: after a slate finishes, fill in the per-run template `output/run_*/scores_template.csv`
+(match names pre-filled; add `home,away,ht_home,ht_away`) and pass it as `--outcomes`. A match left
+blank simply grades its legs as *ungradeable* — never guess a score.
+
+### Calibration (`calibrate.py`)
+
+Once real settlements accumulate in `backtest_legs.csv`, `calibrate.py` reports, per market family:
+`hit%` (won / graded, where graded = won+lost; voids and unsettleable legs excluded) vs `implied%`
+(mean `1/odd` over the same graded legs) and the `gap` in percentage points — the actual measurement
+goal (is a family winning at the rate its ~1.25–1.50 odds imply?). No blended aggregate; an empty
+family reads `-`, never a fabricated 0%.
+
+```
+py calibrate.py --legs output/backtest_legs.csv
+```
+
+### Operational cadence (optional)
+
+`run_all.py` already does scan → matrix → dual-set betslips → booking codes in one command. A natural
+loop is a **daily run** followed by a **morning-after settlement** once the slate finishes:
+
+```
+py run_all.py                                                   # today's slate + fresh booking codes
+py settle.py output/run_*/betslips_*.txt --outcomes scores.csv  # next morning, after entering scores
+py calibrate.py                                                 # weekly, once several slates accrue
+```
+
+Booking codes go stale when matches kick off, so they must be minted at run time — never pre-generate
+a day ahead. This cadence is left as a manual/cron recipe rather than a bundled scheduler.
 
 ## Behaviour / etiquette
 
