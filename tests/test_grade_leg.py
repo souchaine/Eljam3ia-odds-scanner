@@ -288,7 +288,7 @@ def test_out_of_scope_markets_stay_unsettleable():
                  ("To score or assist Neymar", "Over 0.5"), ("Total corners", "Over 8.5"),
                  ("Race to 5 corners", "1"), ("First scoring type", "Goal"),
                  ("A penalty in the match", "Yes"), ("Corner 1x2", "1 (1:0)"),
-                 ("15 minutes - 1x2 from 0:00 to 14:59", "1"), ("Both halves over 1.5", "No")]:
+                 ("15 minutes - 1x2 from 0:00 to 14:59", "1")]:
         assert grade_leg(m, s, HTFT) == "unsettleable", m
 
 
@@ -458,3 +458,88 @@ def test_market_family_goalscorer_or_substitute_is_player():
     # "or" in its name currently routes it into "or-combo" ahead of ever reaching the player check.
     from settle import _market_family
     assert _market_family("Goalscorer OR the substitute to score - Someone") == "player"
+
+
+# ---- P4(a): mixed DC/1X2 half-time/full-time -------------------------------------------------
+
+def test_htft_mixed_dc_halftime_1x2_fulltime():
+    # Real market "DC Halftime/ 1X2 Fulltime" :: "1X/1": the HT pick is a DOUBLE CHANCE ("1X" =
+    # {1, Draw}, membership) while the FT pick is a PLAIN 1X2 result ("1", equality). The two
+    # positions must be interpreted independently -- neither the all-plain nor the all-DC handler
+    # grades this correctly.
+    o_home = MatchOutcome("x", 2, 1, ht_home=1, ht_away=0)   # HT 1-0 (home), FT 2-1 (home)
+    o_away = MatchOutcome("x", 1, 2, ht_home=0, ht_away=1)   # HT 0-1 (away), FT 1-2 (away)
+    assert grade_leg("DC Halftime/ 1X2 Fulltime", "1X/1", o_home) == "won"   # HT in {1,X}=1 ✓; FT 1 ✓
+    assert grade_leg("DC Halftime/ 1X2 Fulltime", "1X/1", o_away) == "lost"  # HT is 2 -> not in {1,X}
+
+
+def test_htft_mixed_ft_position_is_plain_1x2_not_dc():
+    # The FT position is a plain 1X2 result, so a double-chance token there ("12") is NOT a valid
+    # selection and must be unsettleable, never silently accepted as DC. Validate-then-decide:
+    # unsettleable regardless of the scoreline.
+    o_home = MatchOutcome("x", 2, 1, ht_home=1, ht_away=0)
+    o_away = MatchOutcome("x", 1, 2, ht_home=0, ht_away=1)
+    assert grade_leg("DC Halftime/ 1X2 Fulltime", "1X/12", o_home) == "unsettleable"
+    assert grade_leg("DC Halftime/ 1X2 Fulltime", "1X/12", o_away) == "unsettleable"
+
+
+def test_htft_plain_and_dc_forms_still_work():
+    # regression guard: the pre-existing all-plain and all-DC forms are unchanged by the
+    # per-position generalization.
+    o = MatchOutcome("x", 1, 2, ht_home=0, ht_away=1)   # HT 0-1, FT 1-2 (away both)
+    assert grade_leg("Halftime/fulltime", "2/2", o) == "won"
+    assert grade_leg("DC Halftime/ DC Fulltime", "X2/X2", o) == "won"
+    assert grade_leg("Half time/Full time", "2/2", o) == "won"
+
+
+# ---- P4(b): score-derivable "both halves" family ---------------------------------------------
+
+# 1st half = (1,1) total 2; 2nd half = (2-1, 1-1) = (1,0) total 1
+BH = MatchOutcome("x", 2, 1, ht_home=1, ht_away=1)
+
+
+def test_both_halves_over_under_totals():
+    assert grade_leg("Both halves over 0.5", "Yes", BH) == "won"    # 2>0.5 and 1>0.5
+    assert grade_leg("Both halves over 1.5", "Yes", BH) == "lost"   # 2nd half 1 not > 1.5
+    assert grade_leg("Both halves over 1.5", "No", BH) == "won"
+    assert grade_leg("Both halves under 2.5", "Yes", BH) == "won"   # 2<2.5 and 1<2.5
+    assert grade_leg("Both halves under 1.5", "Yes", BH) == "lost"  # 1st half 2 not < 1.5
+    assert grade_leg("Both halves under 1.5", "No", BH) == "won"
+
+
+def test_both_halves_missing_ht_is_unsettleable():
+    assert grade_leg("Both halves over 0.5", "Yes", MatchOutcome("x", 2, 1)) == "unsettleable"
+
+
+def test_both_halves_unrecognized_selection_is_unsettleable():
+    assert grade_leg("Both halves over 0.5", "banana", BH) == "unsettleable"
+
+
+def test_both_halves_over_push_on_a_half_is_unsettleable():
+    # an integer line landing exactly on a half's total is a push; inside a compound "both halves"
+    # condition the push settlement isn't defined -> don't guess (mirrors the void-in-OR rule).
+    assert grade_leg("Both halves over 2", "Yes", BH) == "unsettleable"   # 1st-half total 2 == line
+
+
+def test_team_to_score_in_both_halves():
+    # home scores 1 in each half -> scores in both; away scores 1 then 0 -> not both
+    assert grade_leg("1 to score in both halves", "Yes", BH) == "won"
+    assert grade_leg("1 to score in both halves", "No", BH) == "lost"
+    assert grade_leg("2 to score in both halves", "Yes", BH) == "lost"
+    assert grade_leg("2 to score in both halves", "No", BH) == "won"
+
+
+def test_team_to_win_both_halves():
+    o = MatchOutcome("x", 3, 0, ht_home=1, ht_away=0)   # 1st half 1-0, 2nd half 2-0 (home wins both)
+    assert grade_leg("1 to win both halves", "Yes", o) == "won"
+    assert grade_leg("1 to win both halves", "No", o) == "lost"
+    assert grade_leg("2 to win both halves", "Yes", o) == "lost"
+    o2 = MatchOutcome("x", 2, 0, ht_home=0, ht_away=0)  # 1st half drawn -> not both won
+    assert grade_leg("1 to win both halves", "Yes", o2) == "lost"
+
+
+def test_both_halves_family_classification():
+    from settle import _market_family
+    for m in ("Both halves over 1.5", "Both halves under 2.5",
+              "1 to score in both halves", "2 to win both halves"):
+        assert _market_family(m) == "both halves", m
