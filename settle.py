@@ -321,9 +321,34 @@ def _or_component_verdict(part: str, o: MatchOutcome, tokens: list[str], bare: b
     return "unsettleable"
 
 
+def _or_component_pattern(part: str) -> str | None:
+    """The token pattern this OR component would consume via `_take`, or None if it's
+    self-contained (a bare 1x2 result, or a total line embedded in the market name itself).
+
+    Used by `_grade_or` to detect two components competing for the SAME token shape -- e.g. two
+    yes/no components -- before any token is actually consumed. When that happens there is no
+    type signal to bind by, `_take` would fall back to market order, and the observed provider
+    grammar reverses selection order relative to the market name, so a positional guess is likely
+    wrong. Per the governing principle (a mis-graded leg is worse than an ungraded one), that
+    ambiguity must be caught and returned as unsettleable rather than silently guessed.
+    """
+    p = part.strip().lower()
+    if p in ("1", "2", "draw", "x"):
+        return None
+    if re.fullmatch(r"(over|under)\s+\d+(?:\.\d+)?", p):
+        return None
+    if "any clean sheet" in p or "both team" in p:
+        return r"yes|no"
+    if p.startswith("total"):
+        return r"(over|under)\s+\d+(?:\.\d+)?"
+    return None
+
+
 def _grade_or(market: str, sel: str, o: MatchOutcome) -> str:
     """Grade an "A or B" market. Selection is "Yes"/"No" (simple-OR), or per-component tokens
     bound by type, not position (compound-OR)."""
+    if re.match(r"(1st|2nd|first|second)\s*half", market.strip(), re.IGNORECASE):
+        return "unsettleable"     # half-scoped OR markets are not in scope; don't grade on FT
     if UNSETTLEABLE.search(market):
         return "unsettleable"
     parts = [p for p in _OR_SPLIT.split(market.strip()) if p.strip()]
@@ -337,9 +362,16 @@ def _grade_or(market: str, sel: str, o: MatchOutcome) -> str:
         tokens = [t for t in _OR_SPLIT.split(s) if t.strip()]
         if len(tokens) != len(parts):          # malformed: neither a bare Yes/No nor one token
             return "unsettleable"              # per component -- don't guess
+        patterns = [pat for pat in (_or_component_pattern(p) for p in parts) if pat is not None]
+        if len(patterns) != len(set(patterns)):
+            return "unsettleable"              # two components compete for the same token shape
     verdicts = [_or_component_verdict(p, o, tokens, bare=bool(yesno)) for p in parts]
+    if tokens:                    # a selection token bound to nothing -> don't guess
+        return "unsettleable"
     if any(v == "unsettleable" for v in verdicts):
         return "unsettleable"
+    if any(v == "void" for v in verdicts):
+        return "unsettleable"     # push inside an OR -- settlement rule not defined yet
     hit = any(v == "won" for v in verdicts)
     want_yes = yesno.group(1).lower() == "yes" if yesno else True
     return "won" if hit == want_yes else "lost"

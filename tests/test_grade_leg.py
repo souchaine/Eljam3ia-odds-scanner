@@ -332,3 +332,67 @@ def test_or_combo_malformed_is_unsettleable():
     o = MatchOutcome("x", 2, 1)
     assert grade_leg("Draw or under 1.5", "banana", o) == "unsettleable"
     assert grade_leg("1 or total corners", "Yes", o) == "unsettleable"   # stat component
+
+
+# ---- Review fixes: OR-combos must never guess -----------------------------------------------
+
+def test_or_unconsumed_selection_tokens_are_unsettleable():
+    # Fix 1: both components are self-contained (bare result / embedded line), so neither calls
+    # _take -- the selection tokens are never bound to anything and must not be silently dropped.
+    o = MatchOutcome("x", 2, 1)
+    assert grade_leg("Draw or under 1.5", "banana or split", o) == "unsettleable"
+    assert grade_leg("1 or under 1.5", "over 9.5 or yes", o) == "unsettleable"
+
+
+def test_or_void_component_is_unsettleable():
+    # Fix 2: total == line is a push (void); folding void into "not won" silently defines push
+    # behaviour as a loss. Must not guess -- push settlement inside an OR isn't defined.
+    o = MatchOutcome("x", 1, 1)   # total 2 -- exact push on an integer line
+    assert grade_leg("1 or over 2", "Yes", o) == "unsettleable"
+    assert grade_leg("1 or under 2", "Yes", o) == "unsettleable"
+
+
+def test_or_half_prefixed_market_stays_unsettleable():
+    # Fix 3: a half-scoped OR market ("1st half - ...") must not fall into the OR branch and get
+    # graded on the full-time score -- it's out of scope, like every other half-prefixed market.
+    o = MatchOutcome("x", 2, 1, ht_home=0, ht_away=0)   # HT 0-0: BTTS no, Draw at HT
+    assert grade_leg("1st half - both teams to score or 1", "Yes", o) == "unsettleable"
+
+
+def test_or_same_type_components_are_ambiguous():
+    # Fix 4: both components need a yes/no token -- there's no type signal to bind by, and the
+    # provider grammar reverses selection order, so positional fallback would silently guess.
+    o = MatchOutcome("x", 2, 0)
+    assert grade_leg("Both team to score or any clean sheet", "no or yes", o) == "unsettleable"
+    assert grade_leg("Both team to score or any clean sheet", "yes or no", o) == "unsettleable"
+
+
+def test_compound_or_total_3_5_aligned_and_mixed_polarity():
+    # Fix 5: lock the highest-volume real compound shape ("... or Total 3.5"), including the
+    # mixed-polarity, reversed-order selections seen in real data ("Over 3.5 or no" / "Under 3.5
+    # or yes"). Derivation: verdict = won iff EITHER component's bet, bound by type, wins.
+    market = "Both team to score or Total 3.5"
+    o_yes3 = MatchOutcome("x", 2, 1)   # BTTS yes, total 3
+    o_no2 = MatchOutcome("x", 2, 0)    # BTTS no, total 2
+    o_no4 = MatchOutcome("x", 4, 0)    # BTTS no, total 4
+    # aligned order: BTTS token first, Total token second (matches market order)
+    assert grade_leg(market, "Yes or Over 3.5", o_yes3) == "won"    # BTTS-yes bet hits
+    assert grade_leg(market, "Yes or Over 3.5", o_no2) == "lost"    # BTTS-yes wrong; total 2 not >3.5
+    assert grade_leg(market, "No or Under 3.5", o_no2) == "won"     # BTTS-no bet hits
+    # mixed polarity, reversed order: Total token first, BTTS token second (real 12+1 leg shapes)
+    assert grade_leg(market, "Over 3.5 or no", o_no2) == "won"      # BTTS-no bet hits
+    assert grade_leg(market, "Over 3.5 or no", o_yes3) == "lost"    # BTTS-no wrong; total 3 not >3.5
+    assert grade_leg(market, "Under 3.5 or yes", o_yes3) == "won"   # BTTS-yes bet hits
+    assert grade_leg(market, "Under 3.5 or yes", o_no4) == "lost"   # BTTS-yes wrong; total 4 not <3.5
+
+
+def test_any_clean_sheet_no_and_scoreless_draw():
+    assert _grade_score("any clean sheet", "No", 2, 1) == "won"    # neither team kept a clean sheet
+    assert _grade_score("any clean sheet", "Yes", 0, 0) == "won"   # 0-0: both kept a clean sheet
+    assert _grade_score("any clean sheet", "No", 0, 0) == "lost"
+
+
+def test_compound_or_token_type_mismatch_is_unsettleable():
+    # a compound selection token that doesn't match its component's expected type/pattern.
+    o = MatchOutcome("x", 2, 1)
+    assert grade_leg("Both team to score or Total 2.5", "banana or no", o) == "unsettleable"
