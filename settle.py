@@ -295,6 +295,13 @@ def _or_component_verdict(part: str, o: MatchOutcome, tokens: list[str], bare: b
     family -- the market name alone carries both legs, so a component with no matching token
     just evaluates its own condition as-is). When `bare` is False (the compound-OR family) every
     token-needing component MUST find its own token; a miss is unsettleable, never a silent guess.
+
+    NOTE: the type-classification here (the "any clean sheet" / "both team" / "total" substring
+    checks) is mirrored in `_or_component_pattern` below, which needs to know the SAME token shape
+    each component would consume in order to catch same-type ambiguity before any token is
+    consumed. If a new component type is added here, add a matching branch there too -- otherwise
+    the ambiguity check silently falls through to None ("no collision risk") for the new type,
+    reopening a positional-guess hazard.
     """
     p = part.strip().lower()
     if p in ("1", "2", "draw", "x"):                       # bare result token
@@ -331,6 +338,12 @@ def _or_component_pattern(part: str) -> str | None:
     grammar reverses selection order relative to the market name, so a positional guess is likely
     wrong. Per the governing principle (a mis-graded leg is worse than an ungraded one), that
     ambiguity must be caught and returned as unsettleable rather than silently guessed.
+
+    NOTE: this duplicates `_or_component_verdict`'s type-classification (same substring checks,
+    same hardcoded pattern literals) because it needs to know a component's token shape WITHOUT
+    consuming a token. The two are kept in sync by hand -- if a new component type is added to
+    `_or_component_verdict`, add a matching branch here too, or the ambiguity check will silently
+    fail to classify it (falls through to None = "no collision risk").
     """
     p = part.strip().lower()
     if p in ("1", "2", "draw", "x"):
@@ -344,15 +357,27 @@ def _or_component_pattern(part: str) -> str | None:
     return None
 
 
+_HALF_PREFIX = re.compile(r"(1st|2nd|first|second)\s*half", re.IGNORECASE)
+
+
 def _grade_or(market: str, sel: str, o: MatchOutcome) -> str:
     """Grade an "A or B" market. Selection is "Yes"/"No" (simple-OR), or per-component tokens
     bound by type, not position (compound-OR)."""
-    if re.match(r"(1st|2nd|first|second)\s*half", market.strip(), re.IGNORECASE):
+    if _HALF_PREFIX.match(market.strip()):
         return "unsettleable"     # half-scoped OR markets are not in scope; don't grade on FT
     if UNSETTLEABLE.search(market):
         return "unsettleable"
     parts = [p for p in _OR_SPLIT.split(market.strip()) if p.strip()]
     if len(parts) != 2:
+        return "unsettleable"
+    # The whole-market check above only catches a half-prefix sitting on the FIRST component
+    # (re.match anchors at position 0 of the full string). A half-scope on the SECOND component
+    # ("1 or 1st half both teams to score") would otherwise slip past it, and the component's
+    # substring matching in _or_component_verdict (e.g. "both team" in p) would still match the
+    # half-prefixed fragment and grade it on the full-time score. Check each component's OWN
+    # start with re.match (not re.search over the whole market -- that would also fire on
+    # unrelated substrings like "Both halves over 1.5").
+    if any(_HALF_PREFIX.match(p.strip()) for p in parts):
         return "unsettleable"
     s = sel.strip()
     yesno = re.fullmatch(r"(yes|no)", s, re.IGNORECASE)

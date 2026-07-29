@@ -359,6 +359,17 @@ def test_or_half_prefixed_market_stays_unsettleable():
     assert grade_leg("1st half - both teams to score or 1", "Yes", o) == "unsettleable"
 
 
+def test_or_half_scope_on_either_component_is_unsettleable():
+    # Fix 6: the half-prefix check in _grade_or only anchored at position 0 of the whole market
+    # string, so a half-scope sitting on the SECOND OR component (not the first) slipped through
+    # and got graded on the full-time score. Must bail out per-component, not just whole-market.
+    o = MatchOutcome("x", 2, 1, ht_home=0, ht_away=0)   # 1st half 0-0, FT 2-1
+    assert grade_leg("1st half - both teams to score or 1", "Yes", o) == "unsettleable"
+    assert grade_leg("1 or 1st half both teams to score", "Yes", o) == "unsettleable"
+    assert grade_leg("2nd half - total 1.5 or draw", "Yes", o) == "unsettleable"
+    assert grade_leg("draw or second half both teams to score", "Yes", o) == "unsettleable"
+
+
 def test_or_same_type_components_are_ambiguous():
     # Fix 4: both components need a yes/no token -- there's no type signal to bind by, and the
     # provider grammar reverses selection order, so positional fallback would silently guess.
