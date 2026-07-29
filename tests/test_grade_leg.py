@@ -407,3 +407,54 @@ def test_compound_or_token_type_mismatch_is_unsettleable():
     # a compound selection token that doesn't match its component's expected type/pattern.
     o = MatchOutcome("x", 2, 1)
     assert grade_leg("Both team to score or Total 2.5", "banana or no", o) == "unsettleable"
+
+
+# ---- Final-review fixes ------------------------------------------------------------------------
+
+def test_htft_validates_both_picks_before_deciding():
+    # Fix 1: an unparseable HT/FT pick must be unsettleable regardless of scoreline. The old code
+    # returned "lost" as soon as the FIRST pick mismatched, WITHOUT validating the second
+    # (unparseable) pick -- so the exact same selection graded "lost" or "unsettleable" purely
+    # depending on whether the first pick happened to already miss. Both scorelines below must
+    # land on "unsettleable" for all three shapes.
+    o_ht10 = MatchOutcome("x", 2, 1, ht_home=1, ht_away=0)   # HT 1-0
+    o_ht01 = MatchOutcome("x", 2, 1, ht_home=0, ht_away=1)   # HT 0-1
+    assert grade_leg("Halftime/fulltime", "2/QQQ", o_ht10) == "unsettleable"
+    assert grade_leg("Halftime/fulltime", "2/QQQ", o_ht01) == "unsettleable"
+    assert grade_leg("DC Halftime/ DC Fulltime", "X2/GARBAGE", o_ht10) == "unsettleable"
+    assert grade_leg("DC Halftime/ DC Fulltime", "X2/GARBAGE", o_ht01) == "unsettleable"
+    assert grade_leg("DC Halftime/ DC Fulltime", "1X/GARBAGE", o_ht10) == "unsettleable"
+    assert grade_leg("DC Halftime/ DC Fulltime", "1X/GARBAGE", o_ht01) == "unsettleable"
+
+
+def test_market_family_half_time_full_time_spelling():
+    # Fix 5: grade_leg dispatches "half time/full time" (with spaces) to _grade_htft, so the
+    # family classifier must recognize it too, instead of dumping it in "other".
+    from settle import _market_family
+    assert _market_family("Half time/Full time") == "htft"
+
+
+def test_or_component_whitelist_rejects_loose_substring_matches():
+    # Fix 3: _or_component_verdict used substring/prefix checks ("any clean sheet" in p, "both
+    # team" in p, p.startswith("total")) which GRADE any unanticipated variant that merely
+    # contains the keyword. Must whitelist (fullmatch) known component forms instead, so anything
+    # unanticipated falls through to unsettleable.
+    o = MatchOutcome("x", 2, 1)   # FT 2-1: BTTS yes, total 3
+    assert grade_leg("Both teams to score in both halves or 1", "Yes", o) == "unsettleable"
+    assert grade_leg("1 or 1st-half both teams to score", "Yes", o) == "unsettleable"
+    assert grade_leg("2 or any clean sheet in the 1st half", "Yes", o) == "unsettleable"
+
+
+def test_or_component_whitelist_still_grades_known_forms():
+    # sanity: the whitelist must still accept the exact known forms it's meant to grade.
+    o = MatchOutcome("x", 2, 1)   # FT 2-1: BTTS yes, total 3
+    assert grade_leg("2 or any clean sheet", "Yes", MatchOutcome("x", 2, 0)) == "won"
+    assert grade_leg("Both team to score or Total 2.5", "Under 2.5 or no", o) == "lost"
+    assert grade_leg("1 or both teams to score", "Yes", o) == "won"
+
+
+def test_market_family_goalscorer_or_substitute_is_player():
+    # Fix 5: "Goalscorer OR the substitute to score - <player>" is a player market, but the bare
+    # "or" in its name currently routes it into "or-combo" ahead of ever reaching the player check.
+    from settle import _market_family
+    assert _market_family("Goalscorer OR the substitute to score - Someone") == "player"
