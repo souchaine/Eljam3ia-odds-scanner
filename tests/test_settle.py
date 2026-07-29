@@ -1,4 +1,7 @@
-from settle import parse_betslips, read_outcomes_csv, grade_slip, settle_run, MatchOutcome
+import csv
+
+from settle import (parse_betslips, read_outcomes_csv, grade_slip, settle_run, MatchOutcome,
+                    append_backtest_legs)
 
 BETSLIPS = """Eljam3ia dual-set betslips - built 2026
 window 1.25..1.5, 20 legs/slip
@@ -116,6 +119,47 @@ def test_won_legs_counts_individually_won_legs_even_when_ungradeable():
     _label, verdict, _legs, won_legs, _gradeable_legs = r["verdicts"][0]
     assert verdict == "ungradeable"   # the corners leg cannot be graded
     assert won_legs == 1              # ...but the 1x2 leg genuinely won
+
+
+def test_settle_run_returns_leg_records_aligned_with_verdicts():
+    # per-leg records must be built from the SAME leg verdicts as the family tallies, so a
+    # downstream per-leg backtest log can never disagree with the in-run per-family report.
+    slips = [{"set": "A", "label": "A1", "code": "X", "pred_win_pct": 1.0, "legs": [
+        {"league": "L", "match": "m", "market": "1x2", "selection": "1", "odd": 1.4},
+        {"league": "L", "match": "m", "market": "Total corners", "selection": "Over 8.5", "odd": 1.5}]}]
+    res = settle_run(slips, {"m": MatchOutcome("m", 2, 1)})
+    recs = res["leg_records"]
+    assert len(recs) == 2
+    assert recs[0] == {"match": "m", "family": "main", "market": "1x2",
+                       "selection": "1", "odd": 1.4, "verdict": "won"}
+    assert recs[1]["family"] == "corners" and recs[1]["verdict"] == "unsettleable"
+
+
+def test_append_backtest_legs_writes_header_and_one_row_per_leg(tmp_path):
+    slips = [{"set": "A", "label": "A1", "code": "X", "pred_win_pct": 1.0, "legs": [
+        {"league": "L", "match": "m", "market": "1x2", "selection": "1", "odd": 1.4},
+        {"league": "L", "match": "m", "market": "Total corners", "selection": "Over 8.5", "odd": 1.5}]}]
+    res = settle_run(slips, {"m": MatchOutcome("m", 2, 1)})
+    p = tmp_path / "backtest_legs.csv"
+    append_backtest_legs(p, "run_20260101_1200", res)
+    rows = list(csv.reader(p.read_text(encoding="utf-8-sig").splitlines()))
+    assert rows[0] == ["settled_at", "run_dir", "match", "family",
+                       "market", "selection", "odd", "verdict"]
+    assert len(rows) == 3                       # header + 2 legs
+    assert rows[1][1:] == ["run_20260101_1200", "m", "main", "1x2", "1", "1.4", "won"]
+    assert rows[2][3] == "corners" and rows[2][7] == "unsettleable"
+
+
+def test_append_backtest_legs_appends_without_duplicating_header(tmp_path):
+    slips = [{"set": "A", "label": "A1", "code": "X", "pred_win_pct": 1.0, "legs": [
+        {"league": "L", "match": "m", "market": "1x2", "selection": "1", "odd": 1.4}]}]
+    res = settle_run(slips, {"m": MatchOutcome("m", 2, 1)})
+    p = tmp_path / "backtest_legs.csv"
+    append_backtest_legs(p, "run_A", res)
+    append_backtest_legs(p, "run_B", res)
+    rows = list(csv.reader(p.read_text(encoding="utf-8-sig").splitlines()))
+    assert rows[0][0] == "settled_at"           # single header
+    assert [r[1] for r in rows[1:]] == ["run_A", "run_B"]
 
 
 def test_gradeable_legs_counts_only_score_gradeable_legs():

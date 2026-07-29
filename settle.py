@@ -219,8 +219,13 @@ def _half_score(o: MatchOutcome, which: str) -> tuple[int, int] | None:
     return (o.home - o.ht_home, o.away - o.ht_away)   # 2nd half
 
 
-def _grade_htft(o: MatchOutcome, sel: str, dc: bool = False) -> str:
-    """Grade Halftime/fulltime ("1/1") or DC Halftime/DC Fulltime ("X2/X2").
+def _grade_htft(o: MatchOutcome, sel: str, dc: bool | tuple[bool, bool] = False) -> str:
+    """Grade Halftime/fulltime ("1/1"), DC Halftime/DC Fulltime ("X2/X2"), or a mixed form like
+    DC Halftime/1X2 Fulltime ("1X/1").
+
+    `dc` is the double-chance flag PER POSITION: pass a bool to apply it to both picks, or a
+    (ht_dc, ft_dc) pair to interpret the two positions independently -- a DC pick resolves by
+    membership in a _DC_PAIRS set ("1X" = {1, Draw}); a plain pick resolves by 1X2 equality.
 
     Needs BOTH halves, so it cannot live in _grade_score. FT is cumulative (Gate 3).
     """
@@ -229,22 +234,26 @@ def _grade_htft(o: MatchOutcome, sel: str, dc: bool = False) -> str:
     parts = [p.strip() for p in sel.split("/")]
     if len(parts) != 2:
         return "unsettleable"
+    dc_flags = tuple(dc) if isinstance(dc, (list, tuple)) else (dc, dc)
+    if len(dc_flags) != 2:
+        return "unsettleable"
     ht_res = "1" if o.ht_home > o.ht_away else ("2" if o.ht_away > o.ht_home else "Draw")
     ft_res = "1" if o.home > o.away else ("2" if o.away > o.home else "Draw")
     # Validate BOTH picks first -- resolve each to its allowed result(s) before comparing either
     # against the scoreline. Deciding ("lost") on the first pick before the second is validated
     # made the same unparseable selection grade "lost" or "unsettleable" depending on the score
     # (governing principle: never emit a verdict while a sibling token is unparsed).
-    if dc:
-        allowed_pair = [_DC_PAIRS.get(pick.lower()) for pick in parts]
-        if any(a is None for a in allowed_pair):
+    resolved = []   # per position: a set of allowed results to test membership against
+    for pick, is_dc in zip(parts, dc_flags):
+        if is_dc:
+            allowed = _DC_PAIRS.get(pick.lower())
+        else:
+            one = {"1": "1", "2": "2", "x": "Draw", "draw": "Draw"}.get(pick.lower())
+            allowed = {one} if one is not None else None
+        if allowed is None:
             return "unsettleable"
-        hits = [res in allowed for allowed, res in zip(allowed_pair, (ht_res, ft_res))]
-    else:
-        wants = [{"1": "1", "2": "2", "x": "Draw", "draw": "Draw"}.get(pick.lower()) for pick in parts]
-        if any(w is None for w in wants):
-            return "unsettleable"
-        hits = [want == res for want, res in zip(wants, (ht_res, ft_res))]
+        resolved.append(allowed)
+    hits = [res in allowed for allowed, res in zip(resolved, (ht_res, ft_res))]
     return "won" if all(hits) else "lost"
 
 
@@ -268,6 +277,51 @@ def _grade_on_half(o: MatchOutcome, which: str, core_market: str, sel: str) -> s
     if key in ("both teams score", "both teams to score"):
         key = "both teams to score"
     return _grade_score(key, sel, hs[0], hs[1])
+
+
+def _grade_both_halves(low: str, sel: str, o: MatchOutcome) -> str:
+    """Grade a score-derivable "both halves ..." market. All observed forms take a Yes/No
+    selection and need BOTH half scores; returns unsettleable if the half-time score is unknown,
+    the selection isn't Yes/No, or the market isn't a recognized both-halves form.
+
+    Forms:
+      - "both halves over|under N": each half's total is over/under the line.
+      - "[12] to score in both halves": the team scored (>=1) in each half.
+      - "[12] to win both halves": the team won each half outright.
+    """
+    y = re.fullmatch(r"\s*(yes|no)\s*", sel, re.IGNORECASE)
+    if not y:
+        return "unsettleable"
+    yes = y.group(1).lower() == "yes"
+    h1, h2 = _half_score(o, "1st"), _half_score(o, "2nd")
+    if h1 is None or h2 is None:
+        return "unsettleable"
+
+    m = re.fullmatch(r"both\s+halves\s+(over|under)\s+(\d+(?:\.\d+)?)", low)
+    if m:
+        over = m.group(1) == "over"
+        line = float(m.group(2))
+        t1, t2 = h1[0] + h1[1], h2[0] + h2[1]
+        if t1 == line or t2 == line:      # push on a half inside a compound -> don't guess
+            return "unsettleable"
+        cond = (t1 > line and t2 > line) if over else (t1 < line and t2 < line)
+        return "won" if cond == yes else "lost"
+
+    m = re.fullmatch(r"([12])\s+to\s+score\s+in\s+both\s+halves", low)
+    if m:
+        i = 0 if m.group(1) == "1" else 1
+        cond = h1[i] >= 1 and h2[i] >= 1
+        return "won" if cond == yes else "lost"
+
+    m = re.fullmatch(r"([12])\s+to\s+win\s+both\s+halves", low)
+    if m:
+        if m.group(1) == "1":
+            cond = h1[0] > h1[1] and h2[0] > h2[1]
+        else:
+            cond = h1[1] > h1[0] and h2[1] > h2[0]
+        return "won" if cond == yes else "lost"
+
+    return "unsettleable"
 
 
 def _combine(verdicts: list[str]) -> str:
@@ -439,10 +493,14 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
             ]
         return _combine([grade_leg(mp, sp, o) for mp, sp in zip(mparts, sparts)])
 
-    if low in ("halftime/fulltime", "half time/full time"):
-        return _grade_htft(o, sel)
-    if re.fullmatch(r"dc\s*halftime\s*/\s*dc\s*fulltime", low):
-        return _grade_htft(o, sel, dc=True)
+    # Halftime/fulltime markets, with an optional per-side "DC"/"1X2" qualifier. The qualifier is
+    # read per position so mixed forms ("DC Halftime/ 1X2 Fulltime") interpret the HT pick as a
+    # double chance and the FT pick as a plain 1X2, and vice-versa. A missing/"1X2" qualifier is a
+    # plain pick; "DC" is a double-chance pick.
+    htft_m = re.fullmatch(
+        r"\s*(dc|1x2)?\s*half\s*time\s*/\s*(dc|1x2)?\s*full\s*time\s*", low)
+    if htft_m:
+        return _grade_htft(o, sel, dc=(htft_m.group(1) == "dc", htft_m.group(2) == "dc"))
 
     # "1st/2nd half both teams to score": selection "X/Y" = 1st-half BTTS / 2nd-half BTTS
     if low == "1st/2nd half both teams to score":
@@ -452,6 +510,12 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
         v1 = _grade_on_half(o, "1st", "both teams to score", parts[0])
         v2 = _grade_on_half(o, "2nd", "both teams to score", parts[1])
         return _combine([v1, v2])
+
+    # "both halves ..." markets are score-derivable from BOTH half scores (over/under a line in
+    # each half, a team scoring in each half, or winning each half). Every observed form carries
+    # "both halves" in its name; unrecognized both-halves forms fall through to unsettleable.
+    if "both halves" in low:
+        return _grade_both_halves(low, sel, o)
 
     # "A or B" markets (simple-OR: sel is Yes/No; compound-OR: sel carries per-component tokens,
     # possibly in reversed order vs the market name -- _grade_or binds them by type). The combo
@@ -571,6 +635,7 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
     verdicts = []
     families: dict[str, dict[str, int]] = {}
     family_legs: dict[str, set[tuple[str, str, str]]] = {}
+    leg_records: list[dict] = []       # one per leg, for the per-leg backtest log / calibration
     for slip in slips:
         st = slip["set"] if slip["set"] in tally else "A"
         tally[st]["total"] += 1
@@ -592,9 +657,11 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
                 if v == "won":
                     f["won"] += 1
             family_legs.setdefault(fam, set()).add((leg["match"], leg["market"], leg["selection"]))
+            leg_records.append({"match": leg["match"], "family": fam, "market": leg["market"],
+                                "selection": leg["selection"], "odd": leg["odd"], "verdict": v})
     for fam, legs in family_legs.items():
         families[fam]["distinct"] = len(legs)
-    return {**tally, "verdicts": verdicts, "families": families}
+    return {**tally, "verdicts": verdicts, "families": families, "leg_records": leg_records}
 
 
 class ResultsSource(Protocol):
@@ -622,6 +689,25 @@ def append_backtest(path: Path, run_dir: str, slips: list[dict], result: dict) -
                         f"{slip['pred_win_pct']:g}", verdict, gradeable_legs, won_legs])
 
 
+def append_backtest_legs(path: Path, run_dir: str, result: dict) -> None:
+    """Append one row per graded leg to a per-leg backtest log (family + odd + verdict), the input
+    calibrate.py needs to compare each family's real hit rate against the odds' implied rate.
+
+    Records come straight from settle_run's leg_records, which are built from the same leg verdicts
+    as the per-family tallies, so this log can never disagree with the in-run per-family report.
+    """
+    new = not path.exists()
+    with path.open("a", newline="", encoding="utf-8-sig") as fh:
+        w = csv.writer(fh)
+        if new:
+            w.writerow(["settled_at", "run_dir", "match", "family",
+                        "market", "selection", "odd", "verdict"])
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for r in result["leg_records"]:
+            w.writerow([now, run_dir, r["match"], r["family"],
+                        r["market"], r["selection"], f"{r['odd']:g}", r["verdict"]])
+
+
 def main() -> int:
     for _stream in (sys.stdout, sys.stderr):  # tolerate non-cp1252 names (e.g. 'ă') on Windows
         try:
@@ -632,6 +718,8 @@ def main() -> int:
     ap.add_argument("betslips", help="path to a betslips_*.txt")
     ap.add_argument("--outcomes", required=True, help="scores CSV: match,home,away[,ht_home,ht_away]")
     ap.add_argument("--backtest", default="output/backtest.csv", help="append per-slip rows here")
+    ap.add_argument("--backtest-legs", default="output/backtest_legs.csv",
+                    help="append per-leg rows here (family/odd/verdict; input for calibrate.py)")
     args = ap.parse_args()
 
     bpath, opath = Path(args.betslips), Path(args.outcomes)
@@ -666,6 +754,12 @@ def main() -> int:
     backtest.parent.mkdir(parents=True, exist_ok=True)
     append_backtest(backtest, bpath.parent.name, slips, result)
     print(f"Appended {len(slips)} rows to {backtest}")
+
+    backtest_legs = Path(args.backtest_legs)
+    backtest_legs.parent.mkdir(parents=True, exist_ok=True)
+    append_backtest_legs(backtest_legs, bpath.parent.name, result)
+    print(f"Appended {len(result['leg_records'])} leg rows to {backtest_legs}  "
+          f"(run calibrate.py for per-family hit% vs implied%)")
     return 0
 
 

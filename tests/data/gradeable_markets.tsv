@@ -1,0 +1,209 @@
+# market<TAB>selection -- gradeable pairs from the real corpus; see
+# test_market_family_property.py and _gen_gradeable_fixture.py. Do not hand-edit.
+1 Clean sheet	No
+1 multigoals	0-1
+1 multigoals	0-2
+1 multigoals	0-4
+1 multigoals	1-3
+1 multigoals	1-4
+1 multigoals	1-5
+1 multigoals	1-6
+1 multigoals	1-7
+1 multigoals	2-5
+1 multigoals	2-6
+1 multigoals	2-7
+1 multigoals	3-6
+1 multigoals	3-7
+1 or any clean sheet	Yes
+1 or both teams to score	Yes
+1 or over 1.5	Yes
+1 or over 2.5	Yes
+1 or over 3.5	Yes
+1 or under 1.5	Yes
+1 or under 2.5	Yes
+1 or under 3.5	Yes
+1 to score in both halves	No
+1 to win both halves	No
+1st half - 1 Clean sheet	No
+1st half - 1 Clean sheet	Yes
+1st half - 1 exact goals	0
+1st half - 1 odd/even	Even
+1st half - 1 to score	No
+1st half - 1 to score	Yes
+1st half - 2 Clean sheet	No
+1st half - 2 Clean sheet	Yes
+1st half - 2 exact goals	0
+1st half - 2 odd/even	Even
+1st half - 2 to score	No
+1st half - double chance & both teams to score	12 & no
+1st half - double chance & both teams to score	1X & no
+1st half - double chance & both teams to score	X2 & no
+1st half - handicap	1 (+0)
+1st half - handicap	1 (+0.5)
+1st half - handicap	1 (+0.75)
+1st half - handicap	1 (+1.5)
+1st half - handicap	2 (+0.5)
+1st half - handicap	2 (+0.75)
+1st half - handicap	2 (+1)
+1st half - handicap	2 (-0)
+1st half - handicap 1X2	1 (1:0)
+1st half - handicap 1X2	2 (0:1)
+1st half - multigoals	0-1
+1st half - multigoals	0-2
+1st half - multigoals	1-3
+1st half - multigoals	1-4
+1st half - multigoals	1-5
+1st half - multigoals	1-6
+1st half - multigoals	1-7
+1st half - multigoals	2-6
+1st half - multigoals	2-7
+1st half - total	Over 1
+1st half - total	Under 2
+1st/2nd half both teams to score	No/no
+1x2 & both teams to score	1 & no
+1x2 & total	1 & over 1.5
+1x2 & total	1 & over 2.5
+1x2 & total	1 & under 4.5
+1x2 & total	1 & under 5.5
+1x2 & total	1 & under 6.5
+1x2 & total	2 & over 1.5
+1x2 & total	2 & over 3.5
+1x2 & total	2 & under 5.5
+1x2 & total	2 & under 6.5
+1x2 (match) & 1st half both teams score	1 & no
+1x2 (match) & 1st half both teams score	2 & no
+1x2 (match) & 2nd half both teams score	1 & no
+2 Clean sheet	No
+2 multigoals	0-1
+2 multigoals	0-2
+2 multigoals	0-3
+2 multigoals	0-4
+2 multigoals	1-3
+2 multigoals	1-4
+2 multigoals	1-5
+2 multigoals	1-6
+2 multigoals	1-7
+2 multigoals	2-4
+2 multigoals	2-5
+2 multigoals	2-6
+2 multigoals	2-7
+2 multigoals	3-6
+2 multigoals	3-7
+2 multigoals	No goal
+2 or any clean sheet	Yes
+2 or both teams to score	Yes
+2 or over 1.5	Yes
+2 or over 2.5	Yes
+2 or over 3.5	Yes
+2 or under 2.5	Yes
+2 or under 3.5	Yes
+2 to score in both halves	No
+2nd half - 1 Clean sheet	No
+2nd half - 1 Clean sheet	Yes
+2nd half - 1 total	Under 1.5
+2nd half - 1x2	1
+2nd half - 1x2	2
+2nd half - 1x2 & both teams to score	1 & no
+2nd half - 2 Clean sheet	No
+2nd half - 2 Clean sheet	Yes
+2nd half - 2 to score	No
+2nd half - both teams to score	No
+2nd half - double chance	1 or 2
+2nd half - double chance	1 or draw
+2nd half - double chance	Draw or 2
+2nd half - double chance & both teams to score	12 & no
+2nd half - double chance & both teams to score	1X & no
+2nd half - double chance & both teams to score	X2 & no
+2nd half - handicap	1 (+0.5)
+2nd half - handicap	1 (+0.75)
+2nd half - handicap	1 (-0.25)
+2nd half - handicap	2 (+0.75)
+2nd half - handicap 1X2	1 (1:0)
+2nd half - handicap 1X2	2 (0:1)
+2nd half - handicap 1X2	2 (0:2)
+2nd half - multigoals	0-1
+2nd half - multigoals	0-2
+2nd half - multigoals	0-3
+2nd half - multigoals	1-3
+2nd half - multigoals	1-4
+2nd half - multigoals	1-5
+2nd half - multigoals	1-6
+2nd half - multigoals	1-7
+2nd half - multigoals	2-4
+2nd half - multigoals	2-5
+2nd half - multigoals	2-6
+2nd half - multigoals	2-7
+Both halves over 0.5	Yes
+Both halves over 1.5	No
+Both halves under 1.5	No
+Both halves under 2.5	Yes
+Both halves under 3.5	Yes
+Both team to score or Total 1.5	Under 1.5 or no
+Both team to score or Total 2.5	Over 2.5 or yes
+Both team to score or Total 2.5	Under 2.5 or no
+Both team to score or Total 3.5	Over 3.5 or no
+Both team to score or Total 3.5	Over 3.5 or yes
+Both team to score or Total 3.5	Under 3.5 or no
+Both team to score or Total 3.5	Under 3.5 or yes
+DC Halftime/ 1X2 Fulltime	1X/1
+DC Halftime/ DC Fulltime	1X/12
+DC Halftime/ DC Fulltime	1X/1X
+DC Halftime/ DC Fulltime	X2/X2
+Double chance	1 or 2
+Double chance	Draw or 2
+Double chance & both teams to score	12 & no
+Double chance & both teams to score	1X & no
+Double chance & both teams to score	X2 & no
+Double chance & total 1.5	1/2 & over 1.5
+Double chance & total 1.5	1/X & over 1.5
+Double chance & total 1.5	X/2 & over 1.5
+Double chance & total 2.5	1/2 & over 2.5
+Double chance & total 2.5	1/X & over 2.5
+Double chance & total 2.5	X/2 & over 2.5
+Double chance & total 3.5	1/2 & over 3.5
+Double chance & total 3.5	1/2 & under 3.5
+Double chance & total 3.5	1/X & under 3.5
+Double chance & total 3.5	X/2 & over 3.5
+Double chance & total 3.5	X/2 & under 3.5
+Double chance & total 4.5	1/2 & under 4.5
+Double chance & total 4.5	1/X & under 4.5
+Double chance & total 4.5	X/2 & under 4.5
+Double chance & total 5.5	1/2 & under 5.5
+Double chance & total 5.5	1/X & under 5.5
+Double chance & total 5.5	X/2 & under 5.5
+Double chance & total 6.5	1/2 & under 6.5
+Double chance (match) & 1st half both teams score	12 & no
+Double chance (match) & 1st half both teams score	1X & no
+Double chance (match) & 1st half both teams score	X2 & no
+Double chance (match) & 2nd half both teams score	12 & no
+Double chance (match) & 2nd half both teams score	1X & no
+Double chance (match) & 2nd half both teams score	X2 & no
+Draw or any clean sheet	Yes
+Draw or both teams to score	Yes
+Draw or over 1.5	Yes
+Draw or over 2.5	Yes
+Draw or over 3.5	Yes
+Draw or under 1.5	Yes
+Draw or under 2.5	Yes
+Draw or under 3.5	Yes
+Halftime/fulltime & 1st half total 3.5	1/1 & under 3.5
+Halftime/fulltime & total 1.5	1/1 & over 1.5
+Halftime/fulltime & total 2.5	1/1 & over 2.5
+Halftime/fulltime & total 6.5	1/1 & under 6.5
+Multigoals	0-2
+Multigoals	0-3
+Multigoals	0-4
+Multigoals	0-5
+Multigoals	1-3
+Multigoals	1-4
+Multigoals	1-5
+Multigoals	2-4
+Multigoals	2-5
+Multigoals	2-6
+Multigoals	2-7
+Multigoals	3-6
+Multigoals	3-7
+Multigoals	4+
+Total & both teams to score	Over 2.5 & yes
+Total & both teams to score	Under 3.5 & no
+Total & both teams to score	Under 4.5 & no
