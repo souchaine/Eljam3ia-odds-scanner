@@ -60,9 +60,15 @@ current season. Real stat-family settlement of current runs requires a **paid pl
 paid tiers start around a few tens of USD/month and include the current season + full stats — verify
 current pricing).
 
-**Free path that still has value:** API-Football's free historical seasons let us **validate
-`grade_leg` against real scores at zero cost** (feed known historical final/HT scores through the
-grader and confirm verdicts) — a correctness check, not a current-slate settlement.
+**But coverage ≠ stat depth, and the free tier is the gate (see §7).** API-Football's coverage is
+per-league AND per-season and is **uneven for South America** — "missing coverage can still return a
+successful `200` with an empty array" (their own docs), and lower divisions / smaller confederations
+"often return incomplete data — missing lineups, absent player-level stats." Our slates are NOT only
+top-flight Argentine Primera; the latest run includes **lower divisions and Venezuelan sides**
+(Estudiantes Río Cuarto, Gimnasia Mendoza, Universidad Central de Venezuela) where corner/card/shot
+depth is exactly where API-Football is thinnest. Whether the paid tier is worth anything for THIS
+project therefore cannot be answered from a coverage page — it must be **probed on the free tier
+first** (§7).
 
 ## Design — extend the data, not `grade_leg`'s contract
 
@@ -146,21 +152,59 @@ Design:
 - Per-family reporting only, never a blended aggregate; new stat families slot into the existing
   per-family + calibration tables with real numbers once wired.
 
-## 7. The decision that needs the user (blocks build)
+## 7. Decision gate — the free tier decides whether the spend is worth it
 
-**Which provider, and what budget?** This is genuinely the user's call and gates implementation:
+**Do not frame this as "pick a provider now."** The real question a paid stats tier has to answer is
+**not** "does it cover the slate" but: *once corners/cards/shots legs actually become gradeable, do
+their per-family calibration gaps (hit% − implied%) differ enough from the goals-derived families to
+justify paying?* If the stat families calibrate the same as the goals families (the odds are equally
+(in)efficient), there is nothing to buy — the ~73% score-derivable measurement already tells the
+story. That question is **unanswerable until some real stat legs are graded**, and grading real stat
+legs at zero cost is *exactly* what API-Football's free past-seasons tier is for. So the free tier is
+the **decision gate**, not one option among three. "Pay live" and "stay score-only" are the two
+**post-gate** outcomes.
 
-- **Option A — pay for API-Football (or comparable) paid tier** (~tens of USD/month): the only way
-  to settle **current** South-American slates with stats. Unblocks the remaining 27% + slip-level
-  grading for real.
-- **Option B — free historical validation only** (API-Football free seasons): validate the grader
-  on real historical scores at zero cost; does *not* settle current runs' stat legs.
-- **Option C — stay score-only**: keep hand-entered/score-CSV settlement, accept that stat families
-  remain permanently `gradeable = 0`, and treat the per-family calibration on the ~73% derivable
-  legs as the measurement (still meaningful for the score-derivable families).
+### Gate step 0 — STAT-DEPTH PROBE (zero cost, blocks everything; a verification gate like the score tranches)
 
-Recommendation: **B now, A when it's worth paying.** Wire the seam + name-matching against
-API-Football's free historical data first (proves coverage, name-matching, and stat-market grading
-end-to-end at zero cost), then flip to a paid key for live slates — the adapter is identical, only
-the season/plan changes. Option C loses nothing already built and is a fine indefinite resting point
-if the stat families aren't worth a subscription.
+Before endorsing any signup, **prove the free tier actually has the stats for THESE leagues** — not
+just that the leagues are listed. With a free key (the user creates it; this design never requests or
+enters credentials):
+1. Call `/leagues` for each league the corpus actually scrapes and read the per-season **coverage
+   flags** (`fixtures.statistics_fixtures`, `fixtures.statistics_players`, `fixtures.events`,
+   `lineups`) for the free-accessible past season(s).
+2. For a handful of real fixtures in those leagues+season, call `/fixtures/statistics` and
+   `/fixtures/players` and **inspect the payload**: are `Corner Kicks`, `Yellow/Red Cards`, `Total
+   Shots`, and per-player fields actually **present and non-empty**?
+
+Because a "covered" league can return a `200` with an empty array, the flag alone is not proof — the
+sample payload is. **If the target leagues' stat fields are empty/absent on the free tier, the gate
+FAILS and the finding is decisive: don't pay** — you can't even validate stat grading here, and the
+paid tier for these specific (often lower-division South-American) leagues is the same data source.
+Fall through to score-only. Record which leagues passed/failed; coverage is per-league, so a mixed
+result means "stats only for the top-flight subset."
+
+### Gate step 1 — validate the grader on free historical stat data
+
+If step 0 passes for a workable set of leagues: build the adapter (plan Tasks 1–4) against the free
+historical season, settle a historical stat slate through `settle.py`, and let it write graded stat
+legs into `output/backtest_legs.csv`. This exercises name-matching + stat-market grading end-to-end
+at zero cost.
+
+### Gate step 2 — read the per-family gaps
+
+Run `calibrate.py` on that historical `backtest_legs.csv`. Now the `corners`, `cards`, `player`
+families show **real** hit% vs implied% vs gap alongside the goals families. This is the number the
+whole spend decision hinges on.
+
+### Gate step 3 — THEN decide (post-validation branches)
+
+- **Pay for a live tier** *iff* step 2 shows the stat families' gaps are materially different from the
+  goals families (there is edge/signal specific to stat markets worth settling on live slates). The
+  adapter is identical; only the season/plan key changes.
+- **Stay score-only** if step 0 fails (no stat depth for these leagues) OR step 2 shows stat-family
+  gaps track the goals families (nothing to buy). This loses nothing already built — the per-family
+  calibration on the ~73% score-derivable legs remains the project's measurement, and the stat
+  families simply stay `gradeable = 0`.
+
+The only thing that needs the user right now is **a free API-Football key to run gate step 0** (and
+the willingness to run the probe). Everything downstream follows from what the probe returns.

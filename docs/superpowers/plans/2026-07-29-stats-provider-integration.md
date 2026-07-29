@@ -47,11 +47,22 @@ implementation of the existing `ResultsSource` seam; the scores CSV stays a vali
 
 ---
 
-### Task 0 (pre-req, user): choose provider + budget
+### Task 0 (GATE, blocks everything): free-tier stat-depth probe
 
-Per design §7: **Option A** paid API-Football (settles current slates w/ stats), **Option B** free
-historical validation only, **Option C** stay score-only. Recommended: B now → A later. The tasks
-below assume an API-Football-shaped adapter; swapping providers changes only Task 2.
+Per design §7, the spend decision is **gated on the free tier**, not chosen up front. Before any
+build endorsement, run the zero-cost probe (user supplies a free API-Football key; no credentials are
+requested or entered by the implementer):
+- [ ] `/leagues` → read per-season coverage flags (`statistics_fixtures`, `statistics_players`,
+  `events`, `lineups`) for **each league the corpus actually scrapes**, for the free past season(s).
+- [ ] `/fixtures/statistics` + `/fixtures/players` on a sample of real fixtures in those leagues →
+  **inspect the payload**: are Corner Kicks / Cards / Total Shots / per-player fields present AND
+  non-empty? (A "covered" league can return `200` + empty array — the flag is not proof.)
+- [ ] Record pass/fail per league. **If the target leagues' stats are empty → gate FAILS → stop and
+  recommend score-only** (don't pay for data you can't even validate). Otherwise proceed to Task 1
+  and, after settling a historical stat slate, read the per-family gaps via `calibrate.py` (design
+  §7 steps 1–2) before any pay-live vs score-only decision (§7 step 3).
+
+The tasks below assume an API-Football-shaped adapter; swapping providers changes only Task 2.
 
 ### Task 1: `MatchStats` + widened seam + `grade_leg(stats=)` (no behavior change yet)
 
