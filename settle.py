@@ -635,6 +635,7 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
     verdicts = []
     families: dict[str, dict[str, int]] = {}
     family_legs: dict[str, set[tuple[str, str, str]]] = {}
+    leg_records: list[dict] = []       # one per leg, for the per-leg backtest log / calibration
     for slip in slips:
         st = slip["set"] if slip["set"] in tally else "A"
         tally[st]["total"] += 1
@@ -656,9 +657,11 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
                 if v == "won":
                     f["won"] += 1
             family_legs.setdefault(fam, set()).add((leg["match"], leg["market"], leg["selection"]))
+            leg_records.append({"match": leg["match"], "family": fam, "market": leg["market"],
+                                "selection": leg["selection"], "odd": leg["odd"], "verdict": v})
     for fam, legs in family_legs.items():
         families[fam]["distinct"] = len(legs)
-    return {**tally, "verdicts": verdicts, "families": families}
+    return {**tally, "verdicts": verdicts, "families": families, "leg_records": leg_records}
 
 
 class ResultsSource(Protocol):
@@ -686,6 +689,25 @@ def append_backtest(path: Path, run_dir: str, slips: list[dict], result: dict) -
                         f"{slip['pred_win_pct']:g}", verdict, gradeable_legs, won_legs])
 
 
+def append_backtest_legs(path: Path, run_dir: str, result: dict) -> None:
+    """Append one row per graded leg to a per-leg backtest log (family + odd + verdict), the input
+    calibrate.py needs to compare each family's real hit rate against the odds' implied rate.
+
+    Records come straight from settle_run's leg_records, which are built from the same leg verdicts
+    as the per-family tallies, so this log can never disagree with the in-run per-family report.
+    """
+    new = not path.exists()
+    with path.open("a", newline="", encoding="utf-8-sig") as fh:
+        w = csv.writer(fh)
+        if new:
+            w.writerow(["settled_at", "run_dir", "match", "family",
+                        "market", "selection", "odd", "verdict"])
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for r in result["leg_records"]:
+            w.writerow([now, run_dir, r["match"], r["family"],
+                        r["market"], r["selection"], f"{r['odd']:g}", r["verdict"]])
+
+
 def main() -> int:
     for _stream in (sys.stdout, sys.stderr):  # tolerate non-cp1252 names (e.g. 'ă') on Windows
         try:
@@ -696,6 +718,8 @@ def main() -> int:
     ap.add_argument("betslips", help="path to a betslips_*.txt")
     ap.add_argument("--outcomes", required=True, help="scores CSV: match,home,away[,ht_home,ht_away]")
     ap.add_argument("--backtest", default="output/backtest.csv", help="append per-slip rows here")
+    ap.add_argument("--backtest-legs", default="output/backtest_legs.csv",
+                    help="append per-leg rows here (family/odd/verdict; input for calibrate.py)")
     args = ap.parse_args()
 
     bpath, opath = Path(args.betslips), Path(args.outcomes)
@@ -730,6 +754,12 @@ def main() -> int:
     backtest.parent.mkdir(parents=True, exist_ok=True)
     append_backtest(backtest, bpath.parent.name, slips, result)
     print(f"Appended {len(slips)} rows to {backtest}")
+
+    backtest_legs = Path(args.backtest_legs)
+    backtest_legs.parent.mkdir(parents=True, exist_ok=True)
+    append_backtest_legs(backtest_legs, bpath.parent.name, result)
+    print(f"Appended {len(result['leg_records'])} leg rows to {backtest_legs}  "
+          f"(run calibrate.py for per-family hit% vs implied%)")
     return 0
 
 
