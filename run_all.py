@@ -1,9 +1,10 @@
-"""One-command pipeline: scan all football leagues (today window) -> odds matrix -> 20-leg betslips -> booking codes.
+"""One-command pipeline: scan all football leagues (today window) -> odds matrix -> settleable
+betslips -> booking codes.
 
 Runs the existing scripts in sequence (no logic duplicated here):
   1. eljam3ia_odds_scanner.py  -> odds_matrix_*.csv + _meta.csv
-  2. make_betslips.py          -> betslips_*.txt: two sets per run (SET A up to 50 all-odds +
-                                  SET B up to 25 diversified), each 20-leg slip with a Booking Code + win%
+  2. make_betslips.py          -> betslips_*.txt: up to 25 settleable slips of 4 legs each, every
+                                  leg gradeable from a scores CSV, with a Booking Code + win%
 
 Each run writes into its own dated folder  output/run_YYYYMMDD_HHMM/  and finishes with a
 summary.txt (and console summary) listing the matrix stats and all booking codes.
@@ -11,10 +12,11 @@ summary.txt (and console summary) listing the matrix stats and all booking codes
 Booking codes go stale as matches kick off, so codes are always minted fresh at run time.
 
 Usage:
-    py run_all.py                                 # full pipeline, both sets (SET A 50 + SET B 25)
-    py run_all.py --size 20                        # legs per betslip (forwarded)
+    py run_all.py                                 # full pipeline, <=25 slips of 4 legs
+    py run_all.py --legs 6                         # legs per betslip (forwarded; prints win%)
     py run_all.py --skip-betslips                  # matrix only
-    py run_all.py --set b --slips-b 15             # SET B only, capped at 15 slips
+    py run_all.py --slips 15                       # cap at 15 slips
+    py run_all.py --seed 1234                      # reproduce a previous run's slips
     py run_all.py --hours 0 --scope top            # widen scope / disable today-window
 
 Scheduled use: run_all.cmd wraps this for Windows Task Scheduler (see README).
@@ -77,18 +79,19 @@ def summarize(run_dir: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Full eljam3ia pipeline: matrix + betslips.")
-    parser.add_argument("--size", type=int, default=None, help="legs per betslip (default 20)")
+    parser.add_argument("--legs", "--size", dest="legs", type=int, default=None,
+                        help="legs per betslip (default 4; forwarded)")
     parser.add_argument("--target", default=None, help="odd range 'min..max' (forwarded)")
     parser.add_argument("--tolerance", type=float, default=None)
     parser.add_argument("--skip-betslips", action="store_true", help="matrix only")
     parser.add_argument("--hours", type=float, default=None, help="kickoff window in hours (forwarded)")
     parser.add_argument("--scope", choices=["all", "top"], default=None, help="league scope (forwarded)")
-    parser.add_argument("--slips", type=int, default=None, help="max betslips (forwarded)")
+    parser.add_argument("--slips", "--slips-b", dest="slips", type=int, default=None,
+                        help="max betslips (default 25; forwarded)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="RNG seed for reproducible slips (forwarded)")
     parser.add_argument("--per-category", action="store_true",
                         help="build category-pure betslips (forwarded)")
-    parser.add_argument("--set", choices=["both", "a", "b"], default=None, help="set(s) to build (forwarded)")
-    parser.add_argument("--slips-a", type=int, default=None, help="max SET A slips (forwarded)")
-    parser.add_argument("--slips-b", type=int, default=None, help="max SET B slips (forwarded)")
     args = parser.parse_args()
 
     run_dir = PROJECT_DIR / "output" / f"run_{datetime.now().strftime('%Y%m%d_%H%M')}"
@@ -106,13 +109,9 @@ def main() -> int:
 
     if not args.skip_betslips:
         slip_args = list(forward)
-        if args.size is not None:
-            slip_args += ["--size", str(args.size)]
-        if args.slips is not None:
-            slip_args += ["--slips", str(args.slips)]
-        for f, v in (("--set", args.set), ("--slips-a", args.slips_a), ("--slips-b", args.slips_b)):
-            if v is not None:
-                slip_args += [f, str(v)]
+        for flag in ("legs", "slips", "seed"):
+            if getattr(args, flag) is not None:
+                slip_args += [f"--{flag}", str(getattr(args, flag))]
         if args.per_category:
             slip_args.append("--per-category")
         run_step("Step 2/2: betslips + booking codes", "make_betslips.py", slip_args)
