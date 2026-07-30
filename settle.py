@@ -184,8 +184,11 @@ def _grade_score(key: str, sel: str, home: int, away: int) -> str:
 #      something else -- "Halftime/fulltime & total X" -- files as "htft", while an ordinary
 #      combo that doesn't involve HT/FT -- "Double chance & total X" -- files as "combo".
 _FAMILIES = [
-    ("player",     r"shots?\s*-|shots on goal\s*-|saves goalkeeper|to score or assist|"
-                   r"goalscorer or the substitute"),
+    # `goalscorer` (bare) covers both "Goalscorer - <player>" and "Goalscorer OR the substitute to
+    # score - <player>"; no non-player market in the real vocabulary contains the token (goal-timing
+    # markets are named "First goal" / "Last goal").
+    ("player",     r"shots?\s*-|shots on goal\s*-|saves goalkeeper|to score or assist|goalscorer|"
+                   r"passes\s*-"),
     ("corners",    r"corner"),
     ("cards",      r"booking|card"),
     ("stat-other", r"\bshots?\b|tackle|offside|foul|penalty in the match|scoring type"),
