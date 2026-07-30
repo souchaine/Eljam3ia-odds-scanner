@@ -13,6 +13,7 @@ import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
@@ -197,7 +198,8 @@ _FAMILIES = [
     ("2nd half",   r"2nd\s*half|second\s*half"),
     ("multigoals", r"multigoals"),
     ("main",       r"^(1x2|total|both teams to score|double chance|correct score|"
-                   r"draw no bet|handicap|handicap 1x2|[12] (total|clean sheet|odd/even)|odd/even)"),
+                   r"draw no bet|handicap|handicap 1x2|odd/even|"
+                   r"[12] (total|clean sheet|odd/even|to score|exact goals))"),
 ]
 
 
@@ -533,6 +535,46 @@ def grade_leg(market: str, selection: str, o: MatchOutcome) -> str:
     if UNSETTLEABLE.search(name):
         return "unsettleable"
     return _grade_score(_score_key(low), sel, o.home, o.away)
+
+
+# --- build-time settleability gate -------------------------------------------------------------
+#
+# Every full-time scoreline in 0-4 x 0-4, paired with every valid half-time split (ht <= ft).
+#
+# LOAD-BEARING INVARIANT: *settlement input always carries half-time scores.* Half, HT/FT and
+# both-halves markets return "unsettleable" when ht_home/ht_away are missing, so every
+# representative outcome supplies them. If a settlement source ever stops providing half-time
+# scores, this gate becomes wrong in the dangerous direction -- it would admit markets that cannot
+# actually be graded, and slips built from them would settle as ungradeable.
+REPRESENTATIVE_OUTCOMES = tuple(
+    MatchOutcome("probe", home, away, ht_home, ht_away)
+    for home in range(5) for away in range(5)
+    for ht_home in range(home + 1) for ht_away in range(away + 1)
+)
+
+
+@lru_cache(maxsize=None)
+def is_settleable(market, selection) -> bool:
+    """May this (market, selection) be put on a betslip? True iff grade_leg yields a REAL verdict
+    (won|lost|void) for EVERY representative outcome -- never "unsettleable", never raising.
+
+    Stricter than "gradeable on some scoreline" on purpose: the builder cannot know the outcome, so
+    a market that grades on most scorelines but goes unsettleable on others (e.g. "Both halves over
+    2", where an integer line landing exactly on a half's total is a push we refuse to guess) must
+    be excluded. A market that returns "void" is fine -- a push is a real settlement outcome, not a
+    failure to grade -- so "Total"/"Over 2" stays eligible.
+    """
+    return all(grade_leg(market, selection, o) != "unsettleable" for o in REPRESENTATIVE_OUTCOMES)
+
+
+@lru_cache(maxsize=None)
+def is_void_capable(market, selection) -> bool:
+    """True if some representative outcome pushes this leg (verdict "void").
+
+    Settlement DROPS a void leg (see _verdict_from), so a slip carrying one can settle shorter than
+    it was built -- the builder annotates these so the displayed win% and the settled result agree.
+    """
+    return any(grade_leg(market, selection, o) == "void" for o in REPRESENTATIVE_OUTCOMES)
 
 
 _LEG = re.compile(r"^\s*\d+\.\s+(.*?) - (.*?) - (.*?): (.*?) @ ([\d.]+)\s*$")

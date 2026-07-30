@@ -60,6 +60,26 @@ def test_market_family_both_halves_not_force_fit_into_2nd_half():
     assert _market_family("2nd half - handicap 1X2") == "2nd half"
 
 
+def test_market_family_team_to_score_and_exact_goals_are_main():
+    # Found by the build-time gate sweeping the FULL odds matrix: "1 to score" (x9), "2 to score"
+    # (x9) and "2 exact goals" (x1) are gate-ELIGIBLE yet classified "other", because the main
+    # pattern covered "[12] (total|clean sheet|odd/even)" but not to-score / exact-goals. The old
+    # drift guard could not see it -- its fixture came from betslip legs, and the previous builder
+    # never picked these markets. Under the settleable builder they ARE picked, so the latent
+    # misclassification would start polluting `other` in the per-family calibration.
+    assert _market_family("1 to score") == "main"
+    assert _market_family("2 to score") == "main"
+    assert _market_family("2 exact goals") == "main"
+    assert _market_family("1 exact goals") == "main"
+    # "both halves" is matched BEFORE main, so the both-halves variants are unaffected
+    assert _market_family("1 to score in both halves") == "both halves"
+    assert _market_family("2 to win both halves") == "both halves"
+    # period families are also matched before main
+    assert _market_family("1st half - 1 to score") == "1st half"
+    # and a player market that merely contains "to score" still classifies as player
+    assert _market_family("To score or assist Neymar") == "player"
+
+
 def test_settle_run_reports_distinct_legs_smaller_than_n_when_repeated_across_slips():
     # Fix 4: n counts every leg occurrence (pseudo-replicated when the same leg is repeated across
     # slips); "distinct" must count unique (match, market, selection) triples instead.

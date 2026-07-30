@@ -1,14 +1,18 @@
 """Build multiplier (accumulator) betslips from eljam3ia and reserve a booking code for each.
 
 For the leagues in scope, this collects EVERY qualifying selection per match (price within the
-target range/tolerance) into a pool, then greedily builds two sets per run: SET A (up to
-`--slips-a`, default 50, all-odds) and SET B (up to `--slips-b`, default 25, diversified across
-7 market families) of `--size` legs each (default 20). A match is unique WITHIN a slip, but may
-repeat ACROSS slips -
-each repeat spends a different, not-yet-used qualifying odd for that match, which multiplies the
-number of distinct betslips (and booking codes) that can be produced from the same pool of matches.
-Each betslip is sent to Altenar's reserveBet endpoint, which returns a shareable Booking Code that
-anyone can load on the site via the betslip's "Enter Booking Code" field.
+target range/tolerance) into a pool, keeps only the SETTLEABLE ones (`settle.is_settleable` -- see
+below), then builds up to `--slips` (default 25) slips of `--legs` legs each (default 4), drawn at
+random without replacement. Each leg sits on a DISTINCT match and a DISTINCT market family, and
+only COMPLETE slips are emitted. Each betslip is sent to Altenar's reserveBet endpoint, which
+returns a shareable Booking Code that anyone can load on the site via "Enter Booking Code".
+
+Why 4 legs and why settleable-only: at the pool's ~1.38 average odd a 20-leg accumulator wins about
+0.16% of the time (1 in 620) and -- because a slip is gradeable only if EVERY leg is -- a single
+corners or player-prop leg made the whole slip ungradeable. A 4-leg slip wins ~27% of the time and,
+because every leg passes the build-time gate, settles from a scores CSV the moment its matches
+finish. That is what makes the per-family calibration in calibrate.py possible without a paid stats
+provider.
 
 A booking code only saves the selections (like sharing a filled-in slip) - it places no bet and
 moves no money.
@@ -21,9 +25,9 @@ tries to render it ("Oops! This section of the sportsbook didn't load"). This bu
 exact shape the site itself stores when you click odds, so the codes load cleanly.
 
 Usage:
-    py make_betslips.py                     # all leagues, SET A (<=50) + SET B (<=25), 20 legs/slip
-    py make_betslips.py --size 10
-    py make_betslips.py --set a --slips-a 20
+    py make_betslips.py                     # all leagues, <=25 settleable slips, 4 legs each
+    py make_betslips.py --legs 6            # prints the resulting per-slip win% (~14% at 6 legs)
+    py make_betslips.py --seed 1234         # reproduce a previous run (seed is in its file header)
     py make_betslips.py --league "World Cup 2026" --league "Serie A"
 
 Odds are live: load a code before its matches kick off, or that leg shows as unavailable.
@@ -45,13 +49,20 @@ from eljam3ia_odds_scanner import (
     TOLERANCE, TOP_LEAGUES, clean, fetch, filter_events_by_window, get_all_football_events,
     get_events, now_utc, parse_target, resolve_leagues,
 )
+# The build-time settleability gate lives with the grader so eligibility and grading cannot drift.
+# settle.py imports nothing project-local, so this does not create a cycle.
+from settle import _market_family, is_settleable, is_void_capable
 
 BETSLIP_BASE = "https://sb2betslip-altenar2.biahosted.com/api/Betslip"
 COUNTRY_CODE = "TN"
-GROUP_SIZE = 20   # legs per betslip
-MAX_SLIPS = 50    # max betslips per run
-SLIPS_B = 25      # max slips for the diversified (soft round-robin) builder
+GROUP_SIZE = 4    # legs per betslip: ~27% win at the pool's ~1.38 average odd (20 legs was ~0.16%)
+SLIPS_B = 25      # max slips per run
 OUTPUT_DIR = "output"
+
+# Human-readable section title. The literal "SET B" token is load-bearing: settle.parse_betslips
+# keys slips off `===== SET [AB]`, and existing backtest*.csv history joins on that letter, so it
+# survives SET A's removal.
+SECTION_TITLE = "SET B: settleable"
 
 CATEGORY_ORDER = ["main", "combo DC", "1st half", "2nd half", "corners", "carte", "multigoals"]
 
@@ -163,51 +174,131 @@ def build_slips(pools: dict[str, list[dict]], size: int, max_slips: int) -> list
     return slips
 
 
-def build_diversified_slips(pools: dict[str, list[dict]], size: int,
-                            max_slips: int) -> list[list[dict]]:
-    """Greedy family round-robin: each slip spreads legs across CATEGORY_ORDER, best-effort.
+def max_complete_slips(family_depths, legs: int) -> int:
+    """Ceiling on complete slips given per-family selection depths.
 
-    Distinct match per slip; each selection (odd) consumed once overall; at most one trailing
-    partial. Thin families contribute what they have; remaining legs fill from any family.
+    Every slip takes one selection from each of `legs` DISTINCT families, so a family contributes at
+    most once per slip -- at most R times across R slips. R slips are therefore feasible iff
+    `sum(min(depth, R)) >= R * legs`.
+
+    The binding constraint is the SHALLOW families, not the pool total: with depths [100, 1, 1, 1]
+    and legs=4 the ceiling is 1, not 103//4 = 25. When exactly `legs` families exist this reduces to
+    "the depth of the legs-th deepest family"; with more families than legs a family can sit out
+    some slips, so the ceiling rises above that (e.g. five families of 10 support 12 four-leg slips).
     """
-    if size <= 0:
+    depths = [d for d in family_depths if d > 0]
+    if legs <= 0 or len(depths) < legs:
+        return 0
+    r = 0
+    while sum(min(d, r + 1) for d in depths) >= (r + 1) * legs:
+        r += 1
+    return r
+
+
+def build_settleable_slips(pools: dict[str, list[dict]], legs: int, max_slips: int,
+                           rng: random.Random) -> list[list[dict]]:
+    """Random, without-replacement builder for settleable slips.
+
+    Each slip has exactly `legs` legs, each on a DISTINCT match and a DISTINCT settle family.
+    Only selections that pass the build-time gate (`settle.is_settleable`) are eligible, so every
+    emitted slip is gradeable from a scores CSV the moment its matches finish.
+
+    Only COMPLETE slips are emitted -- when one can no longer be filled the builder stops rather
+    than emitting a partial or reusing a selection. Because distinct-family-per-leg makes shallow
+    families the binding constraint (see `max_complete_slips`), this degradation is normal on thin
+    slates and is not an error.
+    """
+    if legs <= 0 or max_slips <= 0:
         return []
-    # per-category -> match_key -> list of selections (copies so we can pop without touching caller)
-    by_cat: dict[str, dict[str, list[dict]]] = {c: {} for c in CATEGORY_ORDER}
-    for key, sels in pools.items():
-        for s in sels:
-            cat = market_category(s["market_name"])
-            by_cat.setdefault(cat, {}).setdefault(key, []).append(s)
-
-    def remaining_matches() -> set:
-        return {k for cat in by_cat.values() for k, v in cat.items() if v}
-
+    remaining = [s for sels in pools.values() for s in sels
+                 if is_settleable(s.get("market_name"), s.get("label"))]
     slips: list[list[dict]] = []
     while len(slips) < max_slips:
-        if len(remaining_matches()) < 2:
-            break
+        rng.shuffle(remaining)                    # reshuffle per slip: no fixed structural pattern
         slip: list[dict] = []
         used_matches: set = set()
-        progressed = True
-        while len(slip) < size and progressed:
-            progressed = False
-            for cat in CATEGORY_ORDER:
-                if len(slip) >= size:
-                    break
-                # eligible matches in this family: have stock and not already in this slip
-                candidates = [(k, v) for k, v in by_cat.get(cat, {}).items() if v and k not in used_matches]
-                if not candidates:
-                    continue
-                k, v = max(candidates, key=lambda kv: len(kv[1]))
-                slip.append(v.pop())
-                used_matches.add(k)
-                progressed = True
-        if not slip:
-            break
+        used_families: set = set()
+        for s in remaining:
+            if len(slip) == legs:
+                break
+            fam = _market_family(s.get("market_name"))
+            if s.get("match") in used_matches or fam in used_families:
+                continue
+            slip.append(s)
+            used_matches.add(s.get("match"))
+            used_families.add(fam)
+        if len(slip) < legs:
+            break                                 # cannot complete -> stop; never emit a partial
+        chosen = {id(s) for s in slip}
+        remaining = [s for s in remaining if id(s) not in chosen]
         slips.append(slip)
-        if len(slip) < size:  # could not fill -> trailing partial
-            break
     return slips
+
+
+def resolve_seed(seed: int | None) -> int:
+    """The seed actually used for this run.
+
+    When --seed is unset we draw one from system entropy and RETURN it, so the value written into
+    the file header is the real one: feeding it back via --seed reproduces that exact file. A
+    placeholder default here would silently break that guarantee.
+    """
+    return random.SystemRandom().randrange(2 ** 32) if seed is None else int(seed)
+
+
+def expected_win_pct(pool: list[dict], legs: int) -> float:
+    """Per-slip win% implied by the gated pool's average odd.
+
+    Printed at build time so raising --legs shows its geometric cost immediately (at ~1.38 average:
+    4 legs ~27%, 6 legs ~14%) instead of the decay being invisible until settlement.
+    """
+    prices = [s["price"] for s in pool if s.get("price")]
+    if not prices or legs <= 0:
+        return 0.0
+    avg = sum(prices) / len(prices)
+    return 100.0 / (avg ** legs) if avg > 0 else 0.0
+
+
+def section_line() -> str:
+    """The section header. Keeps the literal "SET B" token: settle.parse_betslips matches
+    `===== SET [AB]` to key each slip, and output/backtest*.csv history joins on that letter.
+    Only the human-readable remainder changed when SET A was removed."""
+    return f"===== {SECTION_TITLE} ====="
+
+
+def preamble_lines(*, legs: int, seed: int, lo: float, hi: float, matches: int,
+                   max_slips: int, win_pct: float) -> list[str]:
+    """File header: what was built, from what, and how to reproduce it."""
+    return [
+        f"Eljam3ia settleable betslips - built {now_utc()}",
+        f"window {lo:g}..{hi:g}, {legs} legs/slip, seed {seed}; "
+        f"{SECTION_TITLE} (<= {max_slips}), {matches} matches",
+        f"per-slip win% {win_pct:.3g} at {legs} legs -- probability ALL legs win. A pushed (void) "
+        "leg is DROPPED at settlement, shortening the slip, so this is a floor, not an exact rate.",
+        "Every leg is settleable from a scores CSV: match,home,away,ht_home,ht_away "
+        "(half-time scores required).",
+        "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code (before kickoff).",
+        "",
+    ]
+
+
+def slip_header_line(label: str, slip: list[dict]) -> str:
+    """One slip's header. Combined odds and win% use FULL-precision prices; only the per-leg odds
+    are displayed rounded (see leg_line)."""
+    combined = 1.0
+    for s in slip:
+        combined *= s["price"]
+    fams = ", ".join(sorted({_market_family(s["market_name"]) for s in slip}))
+    pushable = sum(1 for s in slip if is_void_capable(s["market_name"], s["label"]))
+    extra = f", {pushable} push-capable leg{'s' if pushable != 1 else ''}" if pushable else ""
+    return (f"BETSLIP {label}  ({len(slip)} legs, combined odds x{combined:.2f}, "
+            f"win% {slip_win_pct(slip):.3g}, families: {fams}{extra})")
+
+
+def leg_line(i: int, s: dict) -> str:
+    """One leg. The odd is DISPLAYED at 2 decimals (bookmaker style); s['price'] keeps full
+    precision and that is what reserveBet receives."""
+    return (f"  {i:2}. {s['league']} - {s['match']} - {s['market_name']}: "
+            f"{s['label']} @ {s['price']:.2f}")
 
 
 def enrich_odds(client: httpx.Client, picks: list[dict]) -> None:
@@ -277,13 +368,13 @@ def main() -> int:
     _utf8_console()
     parser = argparse.ArgumentParser(description="Build multiplier betslips and reserve booking codes.")
     parser.add_argument("--league", action="append", help="league name (repeatable); default: Top Leagues")
-    parser.add_argument("--size", type=int, default=GROUP_SIZE, help="legs per betslip (default 20)")
-    parser.add_argument("--set", choices=["both", "a", "b"], default="both",
-                        help="which set(s) to build: a=all-odds, b=7-category diversified")
-    parser.add_argument("--slips-a", type=int, default=None, help="max SET A slips (default 50)")
-    parser.add_argument("--slips-b", type=int, default=None, help="max SET B slips (default 25)")
-    parser.add_argument("--slips", type=int, default=None,
-                        help="cap BOTH sets at once (alias; --slips-a/--slips-b take precedence)")
+    parser.add_argument("--legs", "--size", dest="legs", type=int, default=GROUP_SIZE,
+                        help="legs per betslip (default 4); the resulting per-slip win%% is printed")
+    parser.add_argument("--slips", "--slips-b", dest="slips", type=int, default=SLIPS_B,
+                        help="max slips to build (default 25)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="RNG seed for reproducible slips; the seed used is written to the "
+                             "file header, so pass it back to regenerate that exact file")
     parser.add_argument("--per-category", action="store_true",
                         help="(legacy) build category-pure slips instead of the two sets")
     parser.add_argument("--target", default=f"{TARGET_MIN}..{TARGET_MAX}",
@@ -298,8 +389,9 @@ def main() -> int:
 
     tmin, tmax = parse_target(args.target)
     lo, hi = tmin - args.tolerance, tmax + args.tolerance
-    slips_a = args.slips_a if args.slips_a is not None else (args.slips if args.slips is not None else MAX_SLIPS)
-    slips_b = args.slips_b if args.slips_b is not None else (args.slips if args.slips is not None else SLIPS_B)
+    slips_b = args.slips
+    seed = resolve_seed(args.seed)
+    rng = random.Random(seed)
 
     with httpx.Client(headers=POST_HEADERS, timeout=30) as client:
         if args.league or args.scope == "top":
@@ -347,35 +439,43 @@ def main() -> int:
                 cat_pools = {k: [s for s in v if market_category(s["market_name"]) == cat]
                              for k, v in pools.items()}
                 cat_pools = {k: v for k, v in cat_pools.items() if v}
-                for i, slip in enumerate(build_slips(cat_pools, args.size, slips_b), 1):
+                for i, slip in enumerate(build_slips(cat_pools, args.legs, slips_b), 1):
                     groups.append((f"{cat} #{i}", slip))
         else:
-            if args.set in ("both", "a"):
-                for i, slip in enumerate(build_slips(pools, args.size, slips_a), 1):
-                    groups.append((f"A{i}", slip))
-            if args.set in ("both", "b"):
-                for i, slip in enumerate(build_diversified_slips(pools, args.size, slips_b), 1):
-                    groups.append((f"B{i}", slip))
+            for i, slip in enumerate(
+                    build_settleable_slips(pools, args.legs, slips_b, rng), 1):
+                groups.append((f"B{i}", slip))
+
+        gated = [s for sels in pools.values() for s in sels
+                 if is_settleable(s.get("market_name"), s.get("label"))]
+        win_pct = expected_win_pct(gated, args.legs)
+        if not args.per_category:
+            depths = Counter(_market_family(s["market_name"]) for s in gated)
+            ceiling = max_complete_slips(depths.values(), args.legs)
+            total = sum(depths.values())
+            print(f"\nGated pool: {total}/{sum(len(v) for v in pools.values())} selections settleable"
+                  f" across {len(depths)} families; avg odd "
+                  f"{(sum(s['price'] for s in gated) / total if total else 0):.4f}")
+            print(f"Per-slip win% at {args.legs} legs: {win_pct:.3g}%")
+            # distinct-family-per-leg means SHALLOW families bind, not the pool total
+            print(f"Family-depth ceiling: {ceiling} complete slips "
+                  f"(pool/legs would suggest {total // args.legs if args.legs else 0}); "
+                  f"depths {dict(depths.most_common())}")
 
         if not groups:
-            print("No betslips could be built (no qualifying selections in range).")
+            print("No betslips could be built (no settleable selections in range).")
             return 1
 
         used = [s for _label, slip in groups for s in slip]
         enrich_odds(client, used)
 
         def section_of(label: str) -> str:
-            if label.startswith("A"):
-                return "SET A: all-odds"
             if label.startswith("B"):
-                return "SET B: 7-category diversified"
+                return SECTION_TITLE
             return label.rsplit(" #", 1)[0]  # legacy per-category
 
-        lines = [f"Eljam3ia dual-set betslips - built {now_utc()}",
-                 f"window {lo:g}..{hi:g}, {args.size} legs/slip; "
-                 f"SET A all-odds (<= {slips_a}), SET B 7-category diversified (<= {slips_b}), "
-                 f"{len(pools)} matches",
-                 "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code (before kickoff).", ""]
+        lines = preamble_lines(legs=args.legs, seed=seed, lo=lo, hi=hi, matches=len(pools),
+                               max_slips=slips_b, win_pct=win_pct)
         current = None
         for label, slip in groups:
             sec = section_of(label)
@@ -384,21 +484,11 @@ def main() -> int:
                 hdr = f"\n===== {sec} ====="
                 print(hdr)
                 lines.append(hdr)
-            combined = 1.0
-            for s in slip:
-                combined *= s["price"]
-            win = slip_win_pct(slip)
-            extra = ""
-            if label.startswith("B"):
-                fam = Counter(market_category(s["market_name"]) for s in slip)
-                shown = "; ".join(f"{k} x{fam[k]}" for k in CATEGORY_ORDER if fam.get(k))
-                extra = f", families: {shown}"
-            header = (f"BETSLIP {label}  ({len(slip)} legs, combined odds x{combined:.2f}, win% {win:.3g}{extra})"
-                      + ("  [partial]" if len(slip) < args.size else ""))
+            header = slip_header_line(label, slip)
             print(f"\n{header}")
             lines.append(header)
             for li, s in enumerate(slip, 1):
-                leg = f"  {li:2}. {s['league']} - {s['match']} - {s['market_name']}: {s['label']} @ {s['price']:g}"
+                leg = leg_line(li, s)
                 print(leg)
                 lines.append(leg)
             try:
