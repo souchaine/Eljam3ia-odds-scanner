@@ -85,8 +85,9 @@ def print_report(cal: dict[str, dict]) -> None:
               f"{_fmt_pct(c['hit_pct'])} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(c['gap'])}")
     total_graded = sum(c["graded"] for c in cal.values())
     if total_graded < 200:
-        print(f"\n  NOTE: only {total_graded} graded legs total — per-family n is small; accumulate "
-              "several real settlements before drawing calibration conclusions.")
+        leg_word = "leg" if total_graded == 1 else "legs"
+        print(f"\n  NOTE: only {total_graded} graded {leg_word} total — per-family n is small; "
+              "accumulate several real settlements before drawing calibration conclusions.")
 
 
 def main() -> int:

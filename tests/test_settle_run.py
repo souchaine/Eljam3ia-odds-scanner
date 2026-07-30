@@ -22,7 +22,7 @@ def test_market_family_has_explicit_other_bucket():
 
 
 def test_settle_run_reports_per_family_counts():
-    slips = [{"set": "A", "label": "A1", "code": "X", "pred_win_pct": 1.0, "legs": [
+    slips = [{"set": "A", "label": "A1", "code": "X", "pred_win_pct_floor": 1.0, "legs": [
         {"league": "L", "match": "m", "market": "1x2", "selection": "1", "odd": 1.4},
         {"league": "L", "match": "m", "market": "1x2", "selection": "2", "odd": 1.4},
         {"league": "L", "match": "m", "market": "Total corners", "selection": "Over 8.5", "odd": 1.4},
@@ -39,7 +39,7 @@ def test_settle_run_reports_per_family_counts():
 
 
 def test_settle_run_keeps_existing_per_set_tallies():
-    slips = [{"set": "A", "label": "A1", "code": "X", "pred_win_pct": 1.0, "legs": [
+    slips = [{"set": "A", "label": "A1", "code": "X", "pred_win_pct_floor": 1.0, "legs": [
         {"league": "L", "match": "m", "market": "1x2", "selection": "1", "odd": 1.4}]}]
     res = settle_run(slips, {"m": MatchOutcome("m", 2, 1)})
     assert res["A"]["total"] == 1 and res["A"]["won"] == 1
@@ -102,8 +102,8 @@ def test_settle_run_reports_distinct_legs_smaller_than_n_when_repeated_across_sl
     leg = {"league": "L", "match": "m", "market": "1x2", "selection": "1", "odd": 1.4}
     other = {"league": "L", "match": "m", "market": "1x2", "selection": "2", "odd": 1.4}
     slips = [
-        {"set": "A", "label": "A1", "code": "X", "pred_win_pct": 1.0, "legs": [dict(leg)]},
-        {"set": "A", "label": "A2", "code": "Y", "pred_win_pct": 1.0, "legs": [dict(leg), dict(other)]},
+        {"set": "A", "label": "A1", "code": "X", "pred_win_pct_floor": 1.0, "legs": [dict(leg)]},
+        {"set": "A", "label": "A2", "code": "Y", "pred_win_pct_floor": 1.0, "legs": [dict(leg), dict(other)]},
     ]
     outcomes = {"m": MatchOutcome("m", 2, 1)}
     res = settle_run(slips, outcomes)

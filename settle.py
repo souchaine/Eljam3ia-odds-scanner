@@ -584,7 +584,7 @@ _LEG = re.compile(r"^\s*\d+\.\s+(.*?) - (.*?) - (.*?): (.*?) @ ([\d.]+)\s*$")
 
 
 def parse_betslips(text: str) -> list[dict]:
-    """Parse a betslips_*.txt into slips with set/label/code/pred_win_pct/legs."""
+    """Parse a betslips_*.txt into slips with set/label/code/pred_win_pct_floor/legs."""
     slips: list[dict] = []
     cur_set = None
     cur = None
@@ -600,7 +600,7 @@ def parse_betslips(text: str) -> list[dict]:
             except ValueError:
                 pred = 0.0  # informational only; keep the slip
             cur = {"set": cur_set, "label": hm.group(1), "code": None,
-                   "pred_win_pct": pred, "legs": []}
+                   "pred_win_pct_floor": pred, "legs": []}
             slips.append(cur)
             continue
         cm = re.match(r"\s*>> BOOKING CODE:\s*(\S+)", line)
@@ -727,11 +727,11 @@ def append_backtest(path: Path, run_dir: str, slips: list[dict], result: dict) -
         w = csv.writer(fh)
         if new:
             w.writerow(["settled_at", "run_dir", "set", "code", "legs",
-                        "pred_win_pct", "verdict", "gradeable_legs", "won_legs"])
+                        "pred_win_pct_floor", "verdict", "gradeable_legs", "won_legs"])
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for slip, (_label, verdict, legs, won_legs, gradeable_legs) in zip(slips, result["verdicts"]):
             w.writerow([now, run_dir, slip["set"], slip["code"], legs,
-                        f"{slip['pred_win_pct']:g}", verdict, gradeable_legs, won_legs])
+                        f"{slip['pred_win_pct_floor']:g}", verdict, gradeable_legs, won_legs])
 
 
 def append_backtest_legs(path: Path, run_dir: str, result: dict) -> None:
@@ -751,6 +751,26 @@ def append_backtest_legs(path: Path, run_dir: str, result: dict) -> None:
         for r in result["leg_records"]:
             w.writerow([now, run_dir, r["match"], r["family"],
                         r["market"], r["selection"], f"{r['odd']:g}", r["verdict"]])
+
+
+def tracker_lines(result: dict) -> list[str]:
+    """Per-set slip tracker lines. Diagnostic only -- the per-family LEG table is the measurement.
+
+    Only sets that actually contain slips are reported: SET A no longer exists in the builder, so a
+    current run would otherwise print a permanently-0/0 SET A line. A legacy 20-leg file that does
+    carry SET A slips still reports it.
+    """
+    lines = ["Slip trackers (diagnostic only — the per-family leg table below is the measurement):"]
+    for st, cap in (("A", 50), ("B", 25)):
+        t = result[st]
+        if not t["total"]:
+            continue
+        lines.append(f"SET {st}: {t['won']}/{t['gradeable']} gradeable won "
+                     f"-> tracker {min(t['won'], cap)}/{cap}  ({t['total']} slips total)")
+    ungr = sum(1 for _l, v, _n, _w, _g in result["verdicts"] if v == "ungradeable")
+    if ungr:
+        lines.append(f"  ({ungr} slip(s) ungradeable — stat/half legs or missing scores)")
+    return lines
 
 
 def main() -> int:
@@ -779,14 +799,8 @@ def main() -> int:
     outcomes = read_outcomes_csv(opath.read_text(encoding="utf-8-sig"))
     result = settle_run(slips, outcomes)
 
-    print("Slip trackers (diagnostic only — a 20-leg parlay is near-information-free):")
-    for st, cap in (("A", 50), ("B", 25)):
-        t = result[st]
-        print(f"SET {st}: {t['won']}/{t['gradeable']} gradeable won "
-              f"-> tracker {min(t['won'], cap)}/{cap}  ({t['total']} slips total)")
-    ungr = sum(1 for _l, v, _n, _w, _g in result["verdicts"] if v == "ungradeable")
-    if ungr:
-        print(f"  ({ungr} slip(s) ungradeable — stat/half legs or missing scores)")
+    for line in tracker_lines(result):
+        print(line)
 
     print("\nPer-family leg hit rate (no blended aggregate — the gradeable subset is a biased sample):")
     print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'gradeable':>10} {'won':>5}  hit%")
