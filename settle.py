@@ -198,7 +198,8 @@ _FAMILIES = [
     ("2nd half",   r"2nd\s*half|second\s*half"),
     ("multigoals", r"multigoals"),
     ("main",       r"^(1x2|total|both teams to score|double chance|correct score|"
-                   r"draw no bet|handicap|handicap 1x2|[12] (total|clean sheet|odd/even)|odd/even)"),
+                   r"draw no bet|handicap|handicap 1x2|odd/even|"
+                   r"[12] (total|clean sheet|odd/even|to score|exact goals))"),
 ]
 
 
