@@ -60,6 +60,22 @@ def test_market_family_both_halves_not_force_fit_into_2nd_half():
     assert _market_family("2nd half - handicap 1X2") == "2nd half"
 
 
+def test_market_family_plain_goalscorer_is_player_not_other():
+    # `other` must stay a genuine catch-all for UNANTICIPATED markets (invariant #7). "Goalscorer -
+    # <player>" is a known player market, but the player pattern only matched the compound form
+    # "goalscorer or the substitute", so the plain form fell through to `other` (9 selections across
+    # the corpus). It is ungradeable either way, so this is a reporting defect, not a grading one.
+    assert _market_family("Goalscorer - Romano Postema (VIK)") == "player"
+    assert _market_family("Goalscorer - Pedro (FLA)") == "player"
+    # the compound form must keep classifying as player too
+    assert _market_family("Goalscorer OR the substitute to score - Someone") == "player"
+    # same defect class, same audit: "Passes - <player>" (15 selections) also sat in `other`
+    assert _market_family("Passes - Bukayo Saka (ENG) (starting lineup) (incl. OT)") == "player"
+    # a goal market that is NOT a player market must stay out of `player`
+    assert _market_family("First goal") != "player"
+    assert _market_family("Last goal") != "player"
+
+
 def test_market_family_team_to_score_and_exact_goals_are_main():
     # Found by the build-time gate sweeping the FULL odds matrix: "1 to score" (x9), "2 to score"
     # (x9) and "2 exact goals" (x1) are gate-ELIGIBLE yet classified "other", because the main
