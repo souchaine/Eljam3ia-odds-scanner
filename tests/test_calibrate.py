@@ -1,4 +1,4 @@
-from calibrate import calibrate, read_legs_csv
+from calibrate import calibrate, print_report, read_legs_csv
 
 
 def _row(family, match, market, selection, odd, verdict):
@@ -59,3 +59,12 @@ def test_read_legs_csv_roundtrips_dictrows():
             "2026-01-01T00:00:00Z,run_A,m,main,1x2,1,1.4,won\n")
     rows = read_legs_csv(text)
     assert rows[0]["family"] == "main" and rows[0]["odd"] == "1.4" and rows[0]["verdict"] == "won"
+
+
+def test_small_sample_note_pluralises_correctly(capsys):
+    one = [_row("main", "m", "1x2", "1", "1.4", "won")]
+    print_report(calibrate(one))
+    assert "only 1 graded leg total" in capsys.readouterr().out      # singular
+    many = one + [_row("main", "m2", "1x2", "1", "1.4", "lost")]
+    print_report(calibrate(many))
+    assert "only 2 graded legs total" in capsys.readouterr().out     # plural
