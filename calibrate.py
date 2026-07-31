@@ -72,17 +72,38 @@ def _fmt_gap(v) -> str:
     return "    -" if v is None else f"{v:+5.0f}"
 
 
-def print_report(cal: dict[str, dict]) -> None:
+DEFAULT_MIN_N = 20   # below this many graded legs, a family's hit rate is not reportable
+
+
+def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N) -> None:
+    """Per-family table. Families with fewer than `min_n` graded legs report counts but NOT a rate.
+
+    Why suppress: a family's hit% is a sample estimate. At an implied rate near 0.72 the standard
+    error at n=10 is ~14pp, so a 95% band spans ~±28pp -- wider than any gap this project is trying
+    to detect. Printing "60%" there reads as signal when it is noise, and a printed number is very
+    hard to un-see. Counts (n / distinct / graded / won) are facts and stay; implied% is exact given
+    the odds (not a sample estimate) and stays too; only hit% and gap -- the estimated quantities --
+    are withheld until the sample can support them.
+    """
     print("Per-family calibration (hit% = won/graded; implied% = mean 1/odd over graded legs; "
           "gap = hit - implied, in pts).")
     print("No blended aggregate: families differ in sample size and the gradeable subset is biased.\n")
     print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'graded':>7} {'won':>5} "
           f"{'hit%':>5} {'impl%':>6} {'gap':>6}")
+    suppressed = 0
     # sort by number of graded legs (the calibration signal), then by n
     for fam in sorted(cal, key=lambda k: (-cal[k]["graded"], -cal[k]["n"])):
         c = cal[fam]
+        hit, gap = c["hit_pct"], c["gap"]
+        if c["graded"] < min_n and hit is not None:
+            hit = gap = None                     # too few graded legs to report a rate
+            suppressed += 1
         print(f"  {fam:<12} {c['n']:>5} {c['distinct']:>8} {c['graded']:>7} {c['won']:>5} "
-              f"{_fmt_pct(c['hit_pct'])} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(c['gap'])}")
+              f"{_fmt_pct(hit)} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)}")
+    if suppressed:
+        print(f"\n  {suppressed} family/families show '-' for hit%/gap: n < {min_n} graded legs, "
+              "where the sampling error is wider than any gap worth reading. Counts are shown; "
+              "the rate is withheld until the sample supports it (--min-n to change).")
     total_graded = sum(c["graded"] for c in cal.values())
     if total_graded < 200:
         leg_word = "leg" if total_graded == 1 else "legs"
@@ -99,6 +120,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Per-family calibration of the settled backtest.")
     ap.add_argument("--legs", default="output/backtest_legs.csv",
                     help="per-leg backtest log written by settle.py")
+    ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N, dest="min_n",
+                    help=f"minimum graded legs before a family's hit%%/gap is reported "
+                         f"(default {DEFAULT_MIN_N}); below it, counts show but the rate does not")
     args = ap.parse_args()
 
     legs = Path(args.legs)
@@ -110,7 +134,7 @@ def main() -> int:
     if not rows:
         print(f"{legs} has no leg rows yet.")
         return 1
-    print_report(calibrate(rows))
+    print_report(calibrate(rows), min_n=args.min_n)
     return 0
 
 
