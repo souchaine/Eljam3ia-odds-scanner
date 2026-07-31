@@ -36,13 +36,16 @@ def calibrate(rows: list[dict]) -> dict[str, dict]:
     """
     acc: dict[str, dict] = {}
     distinct: dict[str, set] = {}
+    matches: dict[str, set] = {}
     for r in rows:
         fam = r.get("family", "") or "other"
         d = acc.setdefault(fam, {"n": 0, "graded": 0, "won": 0, "inv_sum": 0.0, "inv_n": 0})
         d["n"] += 1
         distinct.setdefault(fam, set()).add((r.get("match"), r.get("market"), r.get("selection")))
+        matches.setdefault(fam, set())
         verdict = r.get("verdict")
         if verdict in ("won", "lost"):
+            matches[fam].add(r.get("match"))     # matches contributing GRADED legs
             d["graded"] += 1
             if verdict == "won":
                 d["won"] += 1
@@ -59,8 +62,9 @@ def calibrate(rows: list[dict]) -> dict[str, dict]:
         hit = 100.0 * d["won"] / graded if graded else None
         implied = 100.0 * d["inv_sum"] / inv_n if inv_n else None
         gap = (hit - implied) if (hit is not None and implied is not None) else None
-        out[fam] = {"n": d["n"], "distinct": len(distinct[fam]), "graded": graded,
-                    "won": d["won"], "hit_pct": hit, "implied_pct": implied, "gap": gap}
+        out[fam] = {"n": d["n"], "distinct": len(distinct[fam]), "matches": len(matches[fam]),
+                    "graded": graded, "won": d["won"], "hit_pct": hit, "implied_pct": implied,
+                    "gap": gap}
     return out
 
 
@@ -72,38 +76,57 @@ def _fmt_gap(v) -> str:
     return "    -" if v is None else f"{v:+5.0f}"
 
 
-DEFAULT_MIN_N = 20   # below this many graded legs, a family's hit rate is not reportable
+DEFAULT_MIN_N = 20        # below this many graded legs, a family's hit rate is not reportable
+DEFAULT_MIN_MATCHES = 5   # ...and below this many distinct MATCHES it is not reportable either
+# Why 5 matches: legs are NOT independent. Every leg on one fixture resolves off the same scoreline,
+# so a family's effective sample size is bounded by its MATCH count, not its leg count. Below 5
+# matches a single fixture contributes >20% of the observations and one scoreline can swing the
+# whole "rate". Five is deliberately modest -- it is the floor at which the number stops being a
+# description of three or four football matches.
 
 
-def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N) -> None:
-    """Per-family table. Families with fewer than `min_n` graded legs report counts but NOT a rate.
+def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
+                 min_matches: int = DEFAULT_MIN_MATCHES) -> None:
+    """Per-family table. A family reports a RATE only when it clears BOTH floors:
+    `graded >= min_n` legs AND `matches >= min_matches` distinct fixtures.
 
-    Why suppress: a family's hit% is a sample estimate. At an implied rate near 0.72 the standard
-    error at n=10 is ~14pp, so a 95% band spans ~±28pp -- wider than any gap this project is trying
-    to detect. Printing "60%" there reads as signal when it is noise, and a printed number is very
-    hard to un-see. Counts (n / distinct / graded / won) are facts and stay; implied% is exact given
-    the odds (not a sample estimate) and stays too; only hit% and gap -- the estimated quantities --
-    are withheld until the sample can support them.
+    Why suppress at all: hit% is a sample estimate. At an implied rate near 0.72 the standard error
+    at n=10 is ~14pp, so a 95% band spans ~±28pp -- wider than any gap this project is trying to
+    detect. Printing "60%" there reads as signal when it is noise, and a printed number is hard to
+    un-see.
+
+    Why matches bind: pool legs are heavily within-match correlated -- ~1,900 legs drawn from 22
+    fixtures is nowhere near 1,900 independent observations. Gating on legs alone would let a
+    2-fixture family with 300 legs print a confident-looking rate that is really two scorelines.
+
+    Counts (n / distinct / matches / graded / won) are facts and stay. implied% is exact given the
+    odds -- not a sample estimate -- and stays too. Only hit% and gap are withheld.
     """
     print("Per-family calibration (hit% = won/graded; implied% = mean 1/odd over graded legs; "
           "gap = hit - implied, in pts).")
     print("No blended aggregate: families differ in sample size and the gradeable subset is biased.\n")
-    print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'graded':>7} {'won':>5} "
+    print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'matches':>7} {'graded':>7} {'won':>5} "
           f"{'hit%':>5} {'impl%':>6} {'gap':>6}")
-    suppressed = 0
+    few_legs = few_matches = 0
     # sort by number of graded legs (the calibration signal), then by n
     for fam in sorted(cal, key=lambda k: (-cal[k]["graded"], -cal[k]["n"])):
         c = cal[fam]
         hit, gap = c["hit_pct"], c["gap"]
-        if c["graded"] < min_n and hit is not None:
-            hit = gap = None                     # too few graded legs to report a rate
-            suppressed += 1
-        print(f"  {fam:<12} {c['n']:>5} {c['distinct']:>8} {c['graded']:>7} {c['won']:>5} "
-              f"{_fmt_pct(hit)} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)}")
-    if suppressed:
-        print(f"\n  {suppressed} family/families show '-' for hit%/gap: n < {min_n} graded legs, "
-              "where the sampling error is wider than any gap worth reading. Counts are shown; "
-              "the rate is withheld until the sample supports it (--min-n to change).")
+        if hit is not None and (c["graded"] < min_n or c["matches"] < min_matches):
+            if c["graded"] < min_n:
+                few_legs += 1
+            if c["matches"] < min_matches:
+                few_matches += 1
+            hit = gap = None                     # sample cannot support a rate
+        print(f"  {fam:<12} {c['n']:>5} {c['distinct']:>8} {c['matches']:>7} {c['graded']:>7} "
+              f"{c['won']:>5} {_fmt_pct(hit)} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)}")
+    if few_legs or few_matches:
+        print(f"\n  hit%/gap withheld where the sample cannot support a rate "
+              f"({few_legs} family/families under {min_n} graded legs, "
+              f"{few_matches} under {min_matches} matches).")
+        print("  Legs on the same fixture are CORRELATED -- they all resolve off one scoreline -- so "
+              "the number of\n  distinct matches, not the number of legs, governs the error bars. "
+              "(--min-n / --min-matches to change.)")
     total_graded = sum(c["graded"] for c in cal.values())
     if total_graded < 200:
         leg_word = "leg" if total_graded == 1 else "legs"
@@ -120,6 +143,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Per-family calibration of the settled backtest.")
     ap.add_argument("--legs", default="output/backtest_legs.csv",
                     help="per-leg backtest log written by settle.py")
+    ap.add_argument("--min-matches", type=int, default=DEFAULT_MIN_MATCHES, dest="min_matches",
+                    help=f"minimum DISTINCT MATCHES before a family's hit%%/gap is reported "
+                         f"(default {DEFAULT_MIN_MATCHES}); legs on one fixture are correlated, so "
+                         f"matches govern the error bars")
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N, dest="min_n",
                     help=f"minimum graded legs before a family's hit%%/gap is reported "
                          f"(default {DEFAULT_MIN_N}); below it, counts show but the rate does not")
@@ -134,7 +161,7 @@ def main() -> int:
     if not rows:
         print(f"{legs} has no leg rows yet.")
         return 1
-    print_report(calibrate(rows), min_n=args.min_n)
+    print_report(calibrate(rows), min_n=args.min_n, min_matches=args.min_matches)
     return 0
 
 

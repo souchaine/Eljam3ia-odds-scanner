@@ -120,5 +120,56 @@ def test_n_floor_does_not_change_empty_family_or_add_aggregate(capsys):
 
 
 def test_suppression_is_explained_when_it_fires(capsys):
+    # the dashes must read as "not enough sample", never as "missing data"
     print_report(calibrate(_legs("main", 6, 4)), min_n=20)
-    assert "n < 20" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "withheld" in out and "20 graded legs" in out
+
+
+# ---- matches, not legs, govern the error bars --------------------------------------------------
+
+def _legs_over_matches(family, n_legs, n_matches, won_every=2):
+    """n_legs graded legs spread over exactly n_matches distinct matches."""
+    return [_row(family, f"match{i % n_matches}", "1x2", f"sel{i}", "1.4",
+                 "won" if i % won_every == 0 else "lost") for i in range(n_legs)]
+
+
+def test_calibrate_reports_distinct_matches_per_family():
+    c = calibrate(_legs_over_matches("main", 30, 3))
+    assert c["main"]["graded"] == 30
+    assert c["main"]["matches"] == 3, "matches contributing graded legs"
+
+
+def test_suppressed_when_matches_below_floor_even_if_legs_plentiful(capsys):
+    # 30 legs looks like a big sample, but they come from 2 scorelines: if a match ends 0-2 every
+    # leg on it resolves in correlated ways, so the effective sample is ~2, not 30.
+    print_report(calibrate(_legs_over_matches("main", 30, 2)), min_n=20, min_matches=5)
+    row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("main")][0]
+    assert " 30 " in row and " 2 " in row      # counts still shown
+    assert "50" not in row                     # rate suppressed
+    assert row.rstrip().endswith("-")
+
+
+def test_shown_when_both_floors_met(capsys):
+    print_report(calibrate(_legs_over_matches("main", 30, 6)), min_n=20, min_matches=5)
+    row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("main")][0]
+    assert "50" in row and not row.rstrip().endswith("-")
+
+
+def test_leg_floor_still_binds_when_matches_are_plentiful(capsys):
+    # 10 legs across 10 matches: matches OK, legs too few -> still suppressed
+    print_report(calibrate(_legs_over_matches("main", 10, 10)), min_n=20, min_matches=5)
+    row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("main")][0]
+    assert row.rstrip().endswith("-")
+
+
+def test_min_matches_is_configurable(capsys):
+    print_report(calibrate(_legs_over_matches("main", 30, 2)), min_n=20, min_matches=2)
+    row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("main")][0]
+    assert "50" in row, "lowering the match floor must un-suppress"
+
+
+def test_footnote_explains_within_match_correlation(capsys):
+    print_report(calibrate(_legs_over_matches("main", 30, 2)), min_n=20, min_matches=5)
+    out = capsys.readouterr().out.lower()
+    assert "correlated" in out and "matches" in out and "error bars" in out
