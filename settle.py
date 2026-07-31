@@ -673,6 +673,7 @@ def read_odds_matrix(text: str) -> list[dict]:
         mcol, lcol = header.index("Match"), header.index("League")
     except ValueError:
         return []
+    kcol = header.index("Kickoff (UTC)") if "Kickoff (UTC)" in header else None
     skip = {mcol, lcol}
     for name in ("Kickoff (UTC)", "Event ID"):
         if name in header:
@@ -693,8 +694,42 @@ def read_odds_matrix(text: str) -> list[dict]:
             except ValueError:
                 continue
             out.append({"league": row[lcol].strip(), "match": row[mcol].strip(),
-                        "market": market, "selection": m.group(1).strip(), "odd": odd})
+                        "market": market, "selection": m.group(1).strip(), "odd": odd,
+                        "kickoff": row[kcol].strip() if kcol is not None and len(row) > kcol else ""})
     return out
+
+
+def exclude_inplay(selections: list[dict], scrape_finished_utc: str | None) -> list[dict]:
+    """Keep only selections whose fixture kicked off AFTER the scrape finished.
+
+    Odds scraped once a match is under way are IN-PLAY prices: they encode information about a game
+    already in progress, so their implied probability is not a pre-match prediction and pooling them
+    into calibration injects post-hoc information into a measurement meant to score forecasts.
+
+    Real case: run_20260724_1812 ran for 26 hours (17:12Z Jul 24 -> 19:08Z Jul 25) while its 548
+    fixtures kicked off between 17:15Z and 16:00Z the next day -- the scan window spans the whole
+    fixture list, so which rows are pre-match is unknowable and all of them must go.
+
+    Conservative by construction: a fixture with an unparseable/absent kickoff, or a matrix with no
+    recorded finish time, cannot be SHOWN to be pre-match, so it is excluded rather than assumed
+    clean.
+    """
+    end = _parse_utc(scrape_finished_utc)
+    if end is None:
+        return []
+    kept = []
+    for s in selections:
+        ko = _parse_utc(s.get("kickoff"))
+        if ko is not None and ko > end:
+            kept.append(s)
+    return kept
+
+
+def _parse_utc(value) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 def settle_pool(selections: list[dict], outcomes: dict[str, MatchOutcome]) -> list[dict]:
