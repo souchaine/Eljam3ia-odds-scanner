@@ -626,6 +626,12 @@ def read_outcomes_csv(text: str) -> dict[str, MatchOutcome]:
     for row in csv.reader(text.splitlines()):
         if not row or row[0].strip().lower() in ("match", ""):
             continue
+        # A row with a match name but NO full-time score is a deliberate "not filled in" -- the
+        # match was postponed, or its result could not be verified and guessing is forbidden. That
+        # is a normal, expected state, so it is skipped QUIETLY. A row whose values are present but
+        # unparseable is a genuine data error and must still shout.
+        if len(row) < 3 or (row[1].strip() == "" and row[2].strip() == ""):
+            continue
         try:
             match = row[0].strip()
             home, away = int(row[1]), int(row[2])
@@ -636,6 +642,72 @@ def read_outcomes_csv(text: str) -> dict[str, MatchOutcome]:
             continue
         out[match] = MatchOutcome(match, home, away, hth, hta)
     return out
+
+
+def _leg_record(match: str, market: str, selection: str, odd,
+                outcomes: dict[str, MatchOutcome]) -> dict:
+    """Grade ONE leg into a record. The single place a leg verdict is produced.
+
+    Both slip settlement (settle_run) and full-pool settlement (settle_pool) go through here, so the
+    same (match, market, selection) cannot grade differently depending on which file it lands in.
+    """
+    o = outcomes.get(match)
+    verdict = "unsettleable" if o is None else grade_leg(market, selection, o)
+    return {"match": match, "family": _market_family(market), "market": market,
+            "selection": selection, "odd": odd, "verdict": verdict}
+
+
+_MATRIX_CELL = re.compile(r"^\s*(.+?)\s*@\s*([\d.]+)\s*$")
+
+
+def read_odds_matrix(text: str) -> list[dict]:
+    """Every selection cell of an odds_matrix_*.csv as {league, match, market, selection, odd}.
+
+    Market names are the column headers; each populated cell is "<selection> @ <odd>".
+    """
+    rows = list(csv.reader(text.splitlines()))
+    if not rows:
+        return []
+    header = rows[0]
+    try:
+        mcol, lcol = header.index("Match"), header.index("League")
+    except ValueError:
+        return []
+    skip = {mcol, lcol}
+    for name in ("Kickoff (UTC)", "Event ID"):
+        if name in header:
+            skip.add(header.index(name))
+    out: list[dict] = []
+    for row in rows[1:]:
+        if len(row) <= mcol or not row[mcol].strip():
+            continue
+        for ci, cell in enumerate(row):
+            if ci in skip or ci >= len(header) or not cell.strip():
+                continue
+            market = header[ci].strip()
+            m = _MATRIX_CELL.match(cell)
+            if not market or not m:
+                continue
+            try:
+                odd = float(m.group(2))
+            except ValueError:
+                continue
+            out.append({"league": row[lcol].strip(), "match": row[mcol].strip(),
+                        "market": market, "selection": m.group(1).strip(), "odd": odd})
+    return out
+
+
+def settle_pool(selections: list[dict], outcomes: dict[str, MatchOutcome]) -> list[dict]:
+    """Grade every GATE-ELIGIBLE selection on a slate -- the full observable sample, not just the
+    ~100 legs that happened to be put on slips.
+
+    Slip structure exists for betting and is irrelevant to calibration, which only needs
+    (market, selection, odd, verdict). Gate-ineligible selections are dropped rather than logged as
+    unsettleable: they were never observable, so they are not missing data.
+    """
+    return [_leg_record(s["match"], s["market"], s["selection"], s["odd"], outcomes)
+            for s in selections
+            if is_settleable(s.get("market"), s.get("selection"))]
 
 
 def _leg_verdicts(slip: dict, outcomes: dict[str, MatchOutcome]) -> list[str]:
@@ -694,7 +766,10 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
                 tally[st]["won"] += 1
         verdicts.append((slip["label"], verdict, len(slip["legs"]), won_legs, gradeable_legs))
         for leg, v in zip(slip["legs"], lv):
-            fam = _market_family(leg["market"])
+            # built through the SAME _leg_record used by settle_pool, so a slipped leg and the same
+            # selection observed in the pool can never carry different verdicts
+            rec = _leg_record(leg["match"], leg["market"], leg["selection"], leg["odd"], outcomes)
+            fam = rec["family"]
             f = families.setdefault(fam, {"n": 0, "gradeable": 0, "won": 0, "distinct": 0})
             f["n"] += 1
             if v != "unsettleable":
@@ -702,8 +777,7 @@ def settle_run(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
                 if v == "won":
                     f["won"] += 1
             family_legs.setdefault(fam, set()).add((leg["match"], leg["market"], leg["selection"]))
-            leg_records.append({"match": leg["match"], "family": fam, "market": leg["market"],
-                                "selection": leg["selection"], "odd": leg["odd"], "verdict": v})
+            leg_records.append(rec)
     for fam, legs in family_legs.items():
         families[fam]["distinct"] = len(legs)
     return {**tally, "verdicts": verdicts, "families": families, "leg_records": leg_records}
@@ -753,6 +827,27 @@ def append_backtest_legs(path: Path, run_dir: str, result: dict) -> None:
                         r["market"], r["selection"], f"{r['odd']:g}", r["verdict"]])
 
 
+def append_backtest_pool_legs(path: Path, run_dir: str, records: list[dict]) -> None:
+    """Append full-gated-pool observations to their OWN log.
+
+    CONTAMINATION GUARD -- a slipped leg is a BET; a pool leg is an OBSERVATION. Pooling them would
+    corrupt any analysis that assumes one row = one placed bet. Two defences: (1) this is a separate
+    file from backtest_legs.csv, and (2) it carries a `source` column that the slip schema does NOT,
+    so a naive concatenation yields mismatched headers and fails loudly instead of silently
+    averaging bets together with observations.
+    """
+    new = not path.exists()
+    with path.open("a", newline="", encoding="utf-8-sig") as fh:
+        w = csv.writer(fh)
+        if new:
+            w.writerow(["settled_at", "run_dir", "source", "match", "family",
+                        "market", "selection", "odd", "verdict"])
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for r in records:
+            w.writerow([now, run_dir, "pool", r["match"], r["family"],
+                        r["market"], r["selection"], f"{r['odd']:g}", r["verdict"]])
+
+
 def tracker_lines(result: dict) -> list[str]:
     """Per-set slip tracker lines. Diagnostic only -- the per-family LEG table is the measurement.
 
@@ -785,6 +880,12 @@ def main() -> int:
     ap.add_argument("--backtest", default="output/backtest.csv", help="append per-slip rows here")
     ap.add_argument("--backtest-legs", default="output/backtest_legs.csv",
                     help="append per-leg rows here (family/odd/verdict; input for calibrate.py)")
+    ap.add_argument("--pool", default=None,
+                    help="odds_matrix_*.csv for this run: ALSO settle every gate-eligible selection "
+                         "on the slate (~19x the slipped legs) into --backtest-pool-legs")
+    ap.add_argument("--backtest-pool-legs", default="output/backtest_pool_legs.csv",
+                    dest="backtest_pool_legs",
+                    help="append full-pool OBSERVATIONS here (separate from slip BETS)")
     args = ap.parse_args()
 
     bpath, opath = Path(args.betslips), Path(args.outcomes)
@@ -813,6 +914,21 @@ def main() -> int:
     backtest.parent.mkdir(parents=True, exist_ok=True)
     append_backtest(backtest, bpath.parent.name, slips, result)
     print(f"Appended {len(slips)} rows to {backtest}")
+
+    if args.pool:
+        ppath = Path(args.pool)
+        if not ppath.exists():
+            print(f"pool matrix not found: {ppath}")
+            return 1
+        precs = settle_pool(read_odds_matrix(ppath.read_text(encoding="utf-8-sig")), outcomes)
+        pout = Path(args.backtest_pool_legs)
+        pout.parent.mkdir(parents=True, exist_ok=True)
+        append_backtest_pool_legs(pout, bpath.parent.name, precs)
+        graded = sum(1 for r in precs if r["verdict"] in ("won", "lost"))
+        print(f"\nFull gated pool: {len(precs)} settleable selections across "
+              f"{len({r['match'] for r in precs})} matches -> {graded} graded")
+        print(f"Appended {len(precs)} POOL rows to {pout}  "
+              f"(observations, NOT bets -- separate file on purpose)")
 
     backtest_legs = Path(args.backtest_legs)
     backtest_legs.parent.mkdir(parents=True, exist_ok=True)

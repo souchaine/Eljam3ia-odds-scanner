@@ -216,3 +216,23 @@ def test_gradeable_legs_counts_only_score_gradeable_legs():
     assert gradeable_legs == 1       # only the 1x2 leg is score-gradeable
     assert won_legs == 1
     assert verdict == "ungradeable"  # the corners leg blocks a slip verdict
+
+
+def test_unfilled_row_is_skipped_quietly_but_malformed_still_warns(capsys):
+    """A blank score row is a deliberate 'not filled' (postponed / unverified -> never guess), which
+    is a normal state and must not look like a bug. A row with unparseable VALUES is a real data
+    error and must still warn loudly."""
+    out = read_outcomes_csv("match,home,away,ht_home,ht_away\n"
+                            '"A vs. B",,,,\n'                    # deliberately unfilled -> quiet
+                            '"C vs. D",2,1,1,0\n'                # good
+                            '"E vs. F",x,y,,\n')                 # malformed -> loud
+    err = capsys.readouterr().err
+    assert "C vs. D" in out and len(out) == 1
+    assert "A vs. B" not in err, "an unfilled row must not be reported as malformed"
+    assert "E vs. F" in err and "malformed" in err
+
+
+def test_unfilled_row_still_leaves_its_legs_unsettleable():
+    # the degradation path is unchanged -- quiet, but still no outcome for that match
+    out = read_outcomes_csv('match,home,away\n"A vs. B",,\n')
+    assert out == {}
