@@ -9,8 +9,8 @@ aggregated, so pool rows go to their OWN file with a `source` column that the sl
 """
 import csv
 
-from settle import (MatchOutcome, append_backtest_pool_legs, grade_leg, read_odds_matrix,
-                    settle_pool, settle_run)
+from settle import (MatchOutcome, append_backtest_pool_legs, exclude_inplay, grade_leg,
+                    read_odds_matrix, settle_pool, settle_run)
 
 MATRIX = (
     "League,Match,Kickoff (UTC),Event ID,1x2,Total,Total corners,1st half - total\n"
@@ -26,7 +26,7 @@ def test_read_odds_matrix_extracts_every_selection_cell():
     assert len(rows) == 6                                   # 4 + 2 populated cells
     a = [r for r in rows if r["match"] == "A vs. B" and r["market"] == "1x2"][0]
     assert a == {"league": "LigA", "match": "A vs. B", "market": "1x2",
-                 "selection": "1", "odd": 1.40}
+                 "selection": "1", "odd": 1.40, "kickoff": "2026-07-31T18:00:00Z"}
     assert all(r["odd"] > 0 for r in rows)
 
 
@@ -85,3 +85,40 @@ def test_append_backtest_pool_legs_appends_without_duplicating_header(tmp_path):
     rows = list(csv.reader(p.read_text(encoding="utf-8-sig").splitlines()))
     assert sum(1 for r in rows if r[0] == "settled_at") == 1
     assert {r[1] for r in rows[1:]} == {"run_a", "run_b"}
+
+
+# ---- in-play contamination: odds scraped after kickoff are not pre-match predictions -----------
+
+MATRIX_KO = (
+    "League,Match,Kickoff (UTC),Event ID,1x2\n"
+    "LigA,Early vs. Started,2026-07-24T18:00:00Z,1,1 @ 1.40\n"     # kicked off DURING the scan
+    "LigA,Later vs. Clean,2026-07-25T20:00:00Z,2,1 @ 1.45\n"       # after the scan finished
+    "LigA,No vs. Kickoff,,3,1 @ 1.50\n"                             # unknown -> cannot prove clean
+)
+SCAN_END = "2026-07-25T19:08:33Z"
+
+
+def test_read_odds_matrix_carries_kickoff():
+    rows = read_odds_matrix(MATRIX_KO)
+    assert {r["match"]: r["kickoff"] for r in rows}["Early vs. Started"] == "2026-07-24T18:00:00Z"
+
+
+def test_exclude_inplay_drops_fixtures_that_kicked_off_during_the_scan():
+    """Odds scraped after kickoff are IN-PLAY prices: they encode information about a match already
+    in progress, so their implied probability is not a pre-match prediction and would silently
+    corrupt calibration. Found for real in run_20260724_1812, a 26-hour scan whose window spans its
+    entire fixture list."""
+    kept = exclude_inplay(read_odds_matrix(MATRIX_KO), SCAN_END)
+    names = {r["match"] for r in kept}
+    assert "Later vs. Clean" in names
+    assert "Early vs. Started" not in names, "kickoff inside the scan window -> possibly in-play"
+
+
+def test_exclude_inplay_is_conservative_about_unknown_kickoff():
+    kept = exclude_inplay(read_odds_matrix(MATRIX_KO), SCAN_END)
+    assert "No vs. Kickoff" not in {r["match"] for r in kept}, "cannot prove pre-match -> exclude"
+
+
+def test_exclude_inplay_without_a_scrape_time_keeps_nothing():
+    # no provenance -> nothing can be shown to be pre-match
+    assert exclude_inplay(read_odds_matrix(MATRIX_KO), None) == []
