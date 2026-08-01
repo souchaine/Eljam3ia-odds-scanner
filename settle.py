@@ -644,6 +644,54 @@ def read_outcomes_csv(text: str) -> dict[str, MatchOutcome]:
     return out
 
 
+def validate_outcomes(slips: list[dict], outcomes: dict[str, MatchOutcome]) -> dict:
+    """Check a hand-filled scores CSV against a betslips file BEFORE settling anything.
+
+    Settlement is forgiving by design -- an unmatched name simply yields `unsettleable` legs -- which
+    means a hand-entry typo does not raise, it just silently shrinks the sample. On a CSV typed off a
+    scoreboard that is the likeliest failure mode, so it gets named here while it is still fixable.
+
+    Reports:
+      unjoined_rows   score rows whose match name matches NO leg (almost always a typo)
+      missing_outcomes matches on slips with no score row at all (unfilled / postponed)
+      impossible      half-time exceeds full-time -- goals do not un-score; a transposition typo
+      ft_without_ht   rows with a full-time score but no half-time, plus what that costs
+
+    `ok` is False if anything would corrupt or silently shrink the settlement. A blank HT is a
+    deliberate, supported choice (never guess a score), so it is reported but does NOT block.
+    """
+    leg_matches = [leg["match"] for s in slips for leg in s["legs"]]
+    on_slips = set(leg_matches)
+    unjoined = sorted(set(outcomes) - on_slips)
+    missing = sorted(on_slips - set(outcomes))
+    impossible, ft_no_ht = [], []
+    for name, o in outcomes.items():
+        if o.ht_home is None or o.ht_away is None:
+            if name in on_slips:
+                ft_no_ht.append(name)
+        elif o.ht_home > o.home or o.ht_away > o.away:
+            impossible.append(name)
+
+    # what each problem actually costs, in legs
+    lost_missing = sum(1 for m in leg_matches if m in set(missing))
+    no_ht = set(ft_no_ht)
+    lost_ht = 0
+    for s in slips:
+        for leg in s["legs"]:
+            if leg["match"] in no_ht:
+                probe = MatchOutcome(leg["match"], 2, 1)          # FT only, no half-time
+                if grade_leg(leg["market"], leg["selection"], probe) == "unsettleable":
+                    lost_ht += 1
+    return {"unjoined_rows": unjoined,
+            "legs_affected_by_unjoined": 0,      # by definition they join nothing
+            "missing_outcomes": missing,
+            "legs_ungradeable_from_missing": lost_missing,
+            "impossible": sorted(impossible),
+            "ft_without_ht": sorted(ft_no_ht),
+            "legs_lost_to_missing_ht": lost_ht,
+            "ok": not (unjoined or missing or impossible)}
+
+
 def _leg_record(match: str, market: str, selection: str, odd,
                 outcomes: dict[str, MatchOutcome]) -> dict:
     """Grade ONE leg into a record. The single place a leg verdict is produced.
@@ -915,6 +963,8 @@ def main() -> int:
     ap.add_argument("--backtest", default="output/backtest.csv", help="append per-slip rows here")
     ap.add_argument("--backtest-legs", default="output/backtest_legs.csv",
                     help="append per-leg rows here (family/odd/verdict; input for calibrate.py)")
+    ap.add_argument("--check", action="store_true",
+                    help="validate the scores CSV against the betslips and STOP -- writes nothing")
     ap.add_argument("--pool", default=None,
                     help="odds_matrix_*.csv for this run: ALSO settle every gate-eligible selection "
                          "on the slate (~19x the slipped legs) into --backtest-pool-legs")
@@ -933,6 +983,34 @@ def main() -> int:
 
     slips = parse_betslips(bpath.read_text(encoding="utf-8"))
     outcomes = read_outcomes_csv(opath.read_text(encoding="utf-8-sig"))
+    # Pre-flight: a hand-filled CSV fails silently (a typo'd name just yields unsettleable legs),
+    # so name the problems before anything is written.
+    v = validate_outcomes(slips, outcomes)
+    if v["unjoined_rows"]:
+        print(f"  ! {len(v['unjoined_rows'])} score row(s) match NO leg (likely a typo):")
+        for m in v["unjoined_rows"]:
+            print(f"      {m!r}")
+    if v["missing_outcomes"]:
+        print(f"  ! {len(v['missing_outcomes'])} match(es) on the slips have no score row "
+              f"-> {v['legs_ungradeable_from_missing']} leg(s) ungradeable:")
+        for m in v["missing_outcomes"]:
+            print(f"      {m!r}")
+    if v["impossible"]:
+        print(f"  !! {len(v['impossible'])} match(es) have a half-time score ABOVE full-time "
+              f"(impossible -- check for a transposition):")
+        for m in v["impossible"]:
+            print(f"      {m!r}")
+    if v["ft_without_ht"]:
+        print(f"  - {len(v['ft_without_ht'])} match(es) have full-time but no half-time "
+              f"-> {v['legs_lost_to_missing_ht']} half-dependent leg(s) will not grade "
+              f"(this is the supported 'never guess' path)")
+    if args.check:
+        print("\n--check: nothing written." +
+              ("  Looks clean." if v["ok"] else "  Fix the above first."))
+        return 0 if v["ok"] else 1
+    if not v["ok"]:
+        print("\n  (settling anyway -- the above legs simply will not grade)")
+
     result = settle_run(slips, outcomes)
 
     for line in tracker_lines(result):
