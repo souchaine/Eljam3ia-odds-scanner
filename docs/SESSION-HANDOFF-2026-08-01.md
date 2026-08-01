@@ -9,9 +9,16 @@ Supersedes `SESSION-HANDOFF-2026-07-29.md`. Read this first; then `.superpowers/
 
 ## 1. The one-line status
 
-The project's goal — **per-family hit% vs the odds' implied% (calibration)** — has still produced
-**zero real numbers**. Everything needed to produce them now exists and is verified. The only
-missing input is 22 hand-entered scores. That is the whole critical path.
+**THE GOAL IS ACHIEVED (2026-08-01).** The project's stated goal — per-family hit% vs the odds'
+implied% (calibration) — produced its first REAL numbers: `run_20260731_0039` settled with 21/22
+fixtures scored, 99/100 slip legs graded (2 of 24 gradeable slips won), and **544 graded pool
+observations across 21 matches**. First per-family gaps (pool): or-combo +1, 1st half +6, main −6,
+2nd half −7, combo −4, both halves +3 (htft/multigoals withheld below the n-floor).
+
+**Interpretation is binding: these gaps are NOT signal.** Legs are within-match correlated, so the
+effective sample is ~21 matches; at p≈0.72, n=21 the 95% band is roughly ±20pp — every gap sits
+inside noise. This is one data point plus proof the instrument works. The project's remaining work
+is purely mechanical: **accumulate slates** (each adds ~21 independent matches).
 
 ## 2. What this session changed (headline)
 
@@ -76,40 +83,46 @@ unaffected: implied and hit are computed on the SAME leg set. Proven by trace �
 contamination would read 51.67. Renamed `pred_win_pct` -> `pred_win_pct_floor` so the name carries
 the semantics.
 
-## 4. THE IMMEDIATE NEXT ACTION (P1)
+## 4. THE OPERATING LOOP (P1 complete — this is now the routine)
 
-Everything is staged in `output/run_20260731_0039/`:
+P1 was completed 2026-08-01: `run_20260731_0039` settled from `scores_20260731.csv` (21 filled
+rows; Anzoategui–Tachira omitted, result never published). `scores_template.csv` stays PRISTINE as
+the reusable blank. The repeatable daily loop is:
 
-- `betslips_20260731_0039_offline.txt` — 25 slips x 4 legs, **verified 25/25 gradeable**, built
-  OFFLINE (`reserve()` never called, no booking codes minted)
-- `scores_template.csv` — **PRISTINE, sha `476CB50E3704DB4F`**, 22 blank rows
-- `SCORE-ENTRY-GUIDE.txt` — per-match kickoff, league, leg count, **which need HT**, sources
-
-**All 22 fixtures are played.** Fill the template, then:
-
+1. **Scan + build (no minting):** `py run_all.py --scope all --skip-betslips`, then build the
+   settleable slate OFFLINE from named tier-1 leagues (see the offline-build pattern in the ledger;
+   `reserve()` is never called without explicit user approval — codes go stale at kickoff anyway).
+2. **Scores via the BROWSER (see §5 — this is the solved part):** worldfootball.net match reports
+   give FT + HT + goal minutes on one page. Validate any new source against the golden record first.
+3. **Pre-flight, settle, calibrate:**
 ```
-py settle.py output/run_20260731_0039/betslips_20260731_0039_offline.txt --outcomes output/run_20260731_0039/scores_template.csv
-py calibrate.py
+py settle.py <run>/betslips_*_offline.txt --outcomes <run>/scores_<date>.csv --check
+py settle.py <run>/betslips_*_offline.txt --outcomes <run>/scores_<date>.csv --pool <run>/odds_matrix_*.csv
+py calibrate.py --legs output/backtest_pool_legs.csv
 ```
 
-Rules for the fill: **21 of 22 matches need HT** (53% of legs). NEVER guess a score. Cannot find a
-result -> delete the row. Cannot find HT but have FT -> leave `ht_home`/`ht_away` blank; those legs
-go unsettleable, every full-time leg still grades. The four Welsh fixtures are **Cymru South (tier
-2) cup ties** — search by TEAM, not league.
+Fill rules (unchanged): NEVER guess a score; no result published -> DELETE the row; FT without HT ->
+blank `ht_*` (half legs unsettleable, FT legs still grade). **Cup ties: check the event log for
+`pso` markers — a shootout scoreline is NOT the match result** (O'Higgins–Boca showed "3:4"; the
+real result was 1:0, González 72′; taking the headline would have mis-graded 6 legs).
 
-Expect most families to show `-` for hit%/gap on run one (~12 legs/family, below the floors). That
-is correct behaviour. Do NOT lower `--min-n` to make numbers appear.
+## 5. Score lookup — SOLVED (browser), with the traps that remain
 
-## 5. Blocked, with reasons (do not re-litigate)
+**Plain HTTP is not viable; the BROWSER is.** Every failed attempt (WebFetch/httpx/Jina Reader) was
+plain HTTP, which Cloudflare rejects — a real browser is served normally. Method, proven end-to-end:
 
-**Automated score lookup is NOT VIABLE.** Four attempts, three distinct failure modes:
-1. Direct fetch blocked — worldfootball.net, api-football docs/pricing, ESPN/FOX pages all 403.
-2. Stale index — a search reported Bodo/Glimt "not completed yet" ~12h after full time.
-3. **Wrong fixture** — a lookup for Central Cordoba vs Atletico Tucuman returned a 1-1 from July
-   **2025**, a different match from a different season, presented as the fixture. Undetectable at
-   scale precisely because (1) blocks the cross-check that would catch it.
-Jina Reader (`r.jina.ai`, what Agent Reach's web channel uses) hits the same Cloudflare/CAPTCHA
-wall. **The human fill is the reliable path, not a fallback.**
+- `worldfootball.net/matches-today/dn<YYYY-MM-DD>/` lists every fixture that date with
+  match-report links (also per-country: `/matches-today/cy12/argentina/dn.../`).
+- Each `/match-report/...` page: FT = `.match-result-0`, HT = `.match-result-intermediate
+  .match-result-1`, goals = `li.event.goal` (with minutes). Batch same-origin `fetch()` from the
+  page context — 22 fixtures took 3 JS calls.
+- **Every row self-checks**: stated HT must agree with the goal minutes.
+- **Golden-record validation first**: worldfootball reproduced Central Córdoba 0–2 / HT 0–0 with
+  goals 63′/90+2′, matching the independently-read FOX boxscore, before the other 21 were trusted.
+
+Traps that stay live: penalty-shootout headline scores (`event pso ...` — see §4); timezone (a
+00:15Z kickoff files under the previous local date); stale search indexes and wrong-season results
+mean **search snippets are never a source** — only a match-report page you actually read.
 
 **P2 provider — withdrawn.** No free or public source covers this dataset. Measured against the real
 backlog (2,818 played, in-play-clean fixtures / 39,728 gated selections): Sportmonks free **1.3%**,
