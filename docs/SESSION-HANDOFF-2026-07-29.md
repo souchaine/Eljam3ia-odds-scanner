@@ -1,3 +1,8 @@
+> **SUPERSEDED by `docs/SESSION-HANDOFF-2026-08-01.md`.** Its forward plan (P1-P5) is
+> largely obsolete: P4 shipped, P3 tooling shipped, P2 is withdrawn (no free or public
+> source covers the dataset), and P1's slate is built and waiting on 22 hand-entered
+> scores. Read the 2026-08-01 handoff instead.
+
 # Session Handoff — 2026-07-29
 
 Purpose: full record of this session + the forward plan, so a NEW session can pick up with zero
