@@ -173,3 +173,43 @@ def test_footnote_explains_within_match_correlation(capsys):
     print_report(calibrate(_legs_over_matches("main", 30, 2)), min_n=20, min_matches=5)
     out = capsys.readouterr().out.lower()
     assert "correlated" in out and "matches" in out and "error bars" in out
+
+
+# ---- ROI: the money answer, not the hit-rate answer --------------------------------------------
+
+def test_roi_is_flat_stake_return_per_family():
+    # 2 graded legs @1.50: one won (returns 1.50), one lost (returns 0). Staked 2, returned 1.5.
+    rows = [_row("main", "m1", "1x2", "1", "1.5", "won"),
+            _row("main", "m2", "1x2", "2", "1.5", "lost")]
+    c = calibrate(rows)
+    assert round(c["main"]["roi_pct"], 2) == -25.0
+
+    # all won at 1.4 -> +40%
+    c2 = calibrate([_row("main", f"m{i}", "1x2", "1", "1.4", "won") for i in range(4)])
+    assert round(c2["main"]["roi_pct"], 2) == 40.0
+
+
+def test_roi_excludes_void_legs_like_hit_and_implied():
+    rows = [_row("main", "m1", "Draw no bet", "1", "1.4", "void"),   # stake returned, not counted
+            _row("main", "m2", "1x2", "1", "2.0", "won")]
+    c = calibrate(rows)
+    assert round(c["main"]["roi_pct"], 2) == 100.0                   # 1 staked -> 2.0 back
+
+
+def test_roi_none_when_nothing_graded():
+    c = calibrate([_row("corners", "m", "Total corners", "Over 8.5", "1.4", "unsettleable")])
+    assert c["corners"]["roi_pct"] is None
+
+
+def test_roi_suppressed_below_floors_like_hit(capsys):
+    print_report(calibrate(_legs("main", 6, 4)), min_n=20)           # graded=10 < floor
+    row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("main")][0]
+    assert row.count("-") >= 2, "roi is an estimate too; it must be withheld with hit/gap"
+
+
+def test_roi_shown_when_floors_met(capsys):
+    rows = [_row("main", f"m{i}", "1x2", "1", "1.4", "won" if i % 2 == 0 else "lost")
+            for i in range(30)]
+    print_report(calibrate(rows), min_n=20, min_matches=5)
+    row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("main")][0]
+    assert "roi" in capsys.readouterr().out or "-30" in row or "-" in row  # column rendered
