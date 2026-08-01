@@ -2,8 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`)
-> syntax for tracking. **BLOCKED until the user decides provider + budget** — see the design doc
-> `docs/superpowers/specs/2026-07-29-stats-provider-integration-design.md` §7.
+> syntax for tracking. **BLOCKED — no free or public source covers this dataset (tested
+> 2026-07-31).** See Task 0 below and the design doc
+> `docs/superpowers/specs/2026-07-29-stats-provider-integration-design.md`.
 
 **Goal:** Add a provider adapter that auto-fetches final+HT scores AND match/player stats for a run's
 matches, so the stat families (`player`, `corners`, `cards`, `stat-other`, `interval`) grade and
@@ -29,7 +30,7 @@ implementation of the existing `ResultsSource` seam; the scores CSV stays a vali
   green (it fails if a newly-gradeable market classifies as `other`).
 - Settlement stays offline-replayable: cache raw provider JSON under `output/run_*/provider/`; a
   re-settle must not re-hit the network.
-- Respect the provider quota (API-Football free = 100 req/day): one fixtures-by-date+league call,
+- Respect whatever quota the eventual provider imposes: one fixtures-by-date+league call,
   then one stats call per matched fixture, all cached. Single-thread, backoff/retry, partial-save.
 - Per-family reporting only; no blended aggregate. New stat families slot into the existing
   per-family + `calibrate.py` tables with real numbers once wired.
