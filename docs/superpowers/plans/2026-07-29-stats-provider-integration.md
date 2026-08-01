@@ -2,8 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`)
-> syntax for tracking. **BLOCKED until the user decides provider + budget** — see the design doc
-> `docs/superpowers/specs/2026-07-29-stats-provider-integration-design.md` §7.
+> syntax for tracking. **BLOCKED — no free or public source covers this dataset (tested
+> 2026-07-31).** See Task 0 below and the design doc
+> `docs/superpowers/specs/2026-07-29-stats-provider-integration-design.md`.
 
 **Goal:** Add a provider adapter that auto-fetches final+HT scores AND match/player stats for a run's
 matches, so the stat families (`player`, `corners`, `cards`, `stat-other`, `interval`) grade and
@@ -29,7 +30,7 @@ implementation of the existing `ResultsSource` seam; the scores CSV stays a vali
   green (it fails if a newly-gradeable market classifies as `other`).
 - Settlement stays offline-replayable: cache raw provider JSON under `output/run_*/provider/`; a
   re-settle must not re-hit the network.
-- Respect the provider quota (API-Football free = 100 req/day): one fixtures-by-date+league call,
+- Respect whatever quota the eventual provider imposes: one fixtures-by-date+league call,
   then one stats call per matched fixture, all cached. Single-thread, backoff/retry, partial-save.
 - Per-family reporting only; no blended aggregate. New stat families slot into the existing
   per-family + `calibrate.py` tables with real numbers once wired.
@@ -47,22 +48,33 @@ implementation of the existing `ResultsSource` seam; the scores CSV stays a vali
 
 ---
 
-### Task 0 (GATE, blocks everything): free-tier stat-depth probe
+### Task 0 (GATE, blocks everything): a source with adequate coverage — NOT YET FOUND
 
-Per design §7, the spend decision is **gated on the free tier**, not chosen up front. Before any
-build endorsement, run the zero-cost probe (user supplies a free API-Football key; no credentials are
-requested or entered by the implementer):
-- [ ] `/leagues` → read per-season coverage flags (`statistics_fixtures`, `statistics_players`,
-  `events`, `lineups`) for **each league the corpus actually scrapes**, for the free past season(s).
-- [ ] `/fixtures/statistics` + `/fixtures/players` on a sample of real fixtures in those leagues →
-  **inspect the payload**: are Corner Kicks / Cards / Total Shots / per-player fields present AND
-  non-empty? (A "covered" league can return `200` + empty array — the flag is not proof.)
-- [ ] Record pass/fail per league. **If the target leagues' stats are empty → gate FAILS → stop and
-  recommend score-only** (don't pay for data you can't even validate). Otherwise proceed to Task 1
-  and, after settling a historical stat slate, read the per-family gaps via `calibrate.py` (design
-  §7 steps 1–2) before any pay-live vs score-only decision (§7 step 3).
+**Status 2026-07-31: no free or public source clears this gate.** Tested and measured against the
+real backlog (2,818 played, in-play-clean fixtures / 39,728 gate-eligible selections):
 
-The tasks below assume an API-Football-shaped adapter; swapping providers changes only Task 2.
+- **API-Sports / API-Football free** — key rejected (RapidAPI key on an account with no
+  API-Football subscription); season restriction unverifiable (pricing + docs 403) and likely fatal
+  since every backlog fixture sits in a currently-running season.
+- **Sportmonks free** — Danish Superliga + Scottish Premiership only: **36 fixtures (1.3%)**.
+- **Public / keyless** (openfootball, TheSportsDB, OpenLigaDB) — major European domestic leagues
+  only: **32 fixtures (1.1%)**, and even those are doubtful (our `Bundesliga` is Austrian).
+- **apifootball.com** — the ONLY untested candidate. Publishes half-time fields
+  (`match_hometeam_halftime_score`), which is the requirement that matters most. Free-tier league
+  coverage undocumented.
+
+**The blocker is the backlog's composition, not the providers**: 707 of 2,818 fixtures are in a
+single unnamed competition (`League 2932`), and the rest skew to U20/regional/3rd-tier leagues that
+no commercial or open dataset covers. Provider-shopping cannot fix that.
+
+Before ANY build resumes, a candidate source must reproduce the golden record — **Central Cordoba
+0-2 Atletico Tucuman, HT 0-0** (Argentine Primera, 2026-07-31T00:15Z) — on **both** FT and HT. That
+check exists because a lookup for this exact fixture once returned a 1-1 result from July **2025**,
+a different match from a different season presented as the real one.
+
+If no source clears it, the tier-1 subset (**246 fixtures / 9,607 selections**) is the only tractable
+target and needs a paid tier or patient manual lookup. Everything below stays valid whenever a
+source is found.
 
 ### Task 1: `MatchStats` + widened seam + `grade_leg(stats=)` (no behavior change yet)
 

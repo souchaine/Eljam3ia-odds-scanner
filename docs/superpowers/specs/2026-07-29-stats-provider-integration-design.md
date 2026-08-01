@@ -2,9 +2,17 @@
 
 ## Status
 
-**Design draft — one decision is the user's and blocks implementation** (provider + budget; see
-§7). Everything else here is a concrete, buildable design. This document is the brainstorm+spec
-half of P2's own SDD cycle; the plan half is `docs/superpowers/plans/2026-07-29-stats-provider-integration.md`.
+**BLOCKED — no free or public source covers this dataset (tested 2026-07-31).** The free-tier gate
+that earlier versions of this spec proposed is withdrawn: see "Provider evaluation" below for what
+was actually tried and measured. The *design* (seam, name-matching, caching, invariants) remains
+valid and buildable the day a source with adequate coverage exists — only the provider choice is
+dead, not the architecture.
+
+**This does not block the project.** Manual settlement of a daily slate needs no provider and is
+what produces the project's first real numbers; the provider only ever unlocked the historical
+backlog multiplier.
+
+Plan half of this SDD cycle: `docs/superpowers/plans/2026-07-29-stats-provider-integration.md`.
 
 ## Context
 
@@ -40,35 +48,91 @@ An adapter that, given a run's slips, auto-fetches **final + half-time scores AN
 stats** for each match, so that (a) the stat families grade, and (b) whole slips become gradeable —
 without ever *guessing* a score, a stat, or a name match.
 
-## Provider evaluation (researched 2026-07-29; verify live before committing budget)
+## Provider evaluation — TESTED 2026-07-31, not researched
 
-The slates actually scraped are worldwide but heavily **South American** — the latest run
-(`run_20260728_2035`) is almost entirely Argentine: Tigre, Nacional, Santos, Argentinos Juniors,
-Estudiantes Río Cuarto, Banfield, Sarmiento, San Lorenzo, Gimnasia Mendoza, … So the binding
-question is **free/cheap coverage of Argentine + South American leagues WITH detailed stats**, not
-just top-5 European leagues.
+The free-tier plan in the original version of this spec is **withdrawn**. It was built on an
+assumption that did not survive contact with the APIs, and on a second assumption that was simply
+wrong. Both are recorded here so they are not re-proposed.
 
-| Provider | Free tier | Covers the scraped leagues? | Detailed stats (corners/cards/shots/players)? | Verdict |
+**Withdrawn assumption 1 — "free tier is past-seasons-only, which is fine because our fixtures are
+historical."** This conflates *already played* with *in a season the free tier permits*. Every
+backlog fixture is from July 2026, which sits in a **currently-running** season for these
+competitions (Liga Profesional and Brasileiro Feb-Dec 2026; Eliteserien Mar-Nov; Ekstraklasa and the
+UEFA competitions 2026-27, just started). A match played last week is still in the current season.
+The restriction is therefore probably fatal, not irrelevant. It could not be confirmed: api-football
+pricing and the v3 docs both return HTTP 403 to automated fetches.
+
+**Withdrawn assumption 2 — that a free key was in hand.** Tested directly, two requests:
+
+| endpoint | result |
+|---|---|
+| `v3.football.api-sports.io` (direct) | HTTP 403 — "Invalid API key" |
+| `api-football-v1.p.rapidapi.com` (RapidAPI) | HTTP 403 — "You are not subscribed to this API" |
+
+Those two together are conclusive: RapidAPI returns *not subscribed* only for a VALID key whose
+account lacks that API, while an unrecognised key gets *invalid key*. The key is a RapidAPI key on
+an account with no API-Football subscription, and is not a direct API-Sports key at all.
+
+### Coverage measured against the REAL backlog, per source
+
+Backlog = played, in-play-clean fixtures across the 26 historical matrices: **2,818 fixtures /
+39,728 gate-eligible selections**.
+
+| source | key needed | half-time scores | backlog coverage | verdict |
 |---|---|---|---|---|
-| **football-data.org** | 12 competitions; fixtures/results/tables only; 10 req/min | **No** — the free 12 are mostly top-European + Copa Libertadores + Brazil Série A; **Argentine Primera is not in the free set** | **No** — free tier is scores/tables only | Insufficient: neither the leagues nor the stats. |
-| **API-Football (api-sports.io)** | 100 req/day, 10 req/min; **season-restricted on free** (historical seasons only, not the current/live season — confirm exact seasons at signup) | Yes — 1,200+ comps incl. Brazil Série A and (paid) Argentine Primera | Yes — fixture `statistics` + player `statistics` endpoints exist on paid tiers | **Best fit, but not free for current slates.** Free tier is good for *grader validation on historical seasons*, not for settling current runs. |
-| Sportmonks / TheSportsDB / others | varies | Sportmonks has an Argentine-Primera product; free tiers are typically limited to a couple of European leagues | varies | Evaluate only if API-Football's paid tier is rejected. |
+| API-Sports / API-Football free | yes | yes (`score.halftime`) | all competitions *in principle* | **blocked** — no subscription; season restriction unverified and probably fatal |
+| Sportmonks free | yes | yes | **36 fixtures (1.3%)** — Danish Superliga + Scottish Premiership only, and even that is an upper bound on ambiguous league names | no |
+| apifootball.com | yes | **yes** — `match_hometeam_halftime_score` / `match_awayteam_halftime_score` confirmed in its docs | free-tier league coverage undocumented; untested | only untested candidate |
+| **public / keyless** (openfootball, TheSportsDB, OpenLigaDB) | **no** | openfootball schema shows `ft` only; HT unconfirmed. TheSportsDB is crowd-sourced (accuracy risk). OpenLigaDB is German-only | **32 fixtures (1.1%)** | no |
 
-**Decisive finding:** there is **no free tier that settles a current South-American slate with
-stats**. football-data.org free lacks both the leagues and the stats; API-Football free lacks the
-current season. Real stat-family settlement of current runs requires a **paid plan** (API-Football's
-paid tiers start around a few tens of USD/month and include the current season + full stats — verify
-current pricing).
+### Why public APIs cannot serve this backlog
 
-**But coverage ≠ stat depth, and the free tier is the gate (see §7).** API-Football's coverage is
-per-league AND per-season and is **uneven for South America** — "missing coverage can still return a
-successful `200` with an empty array" (their own docs), and lower divisions / smaller confederations
-"often return incomplete data — missing lineups, absent player-level stats." Our slates are NOT only
-top-flight Argentine Primera; the latest run includes **lower divisions and Venezuelan sides**
-(Estudiantes Río Cuarto, Gimnasia Mendoza, Universidad Central de Venezuela) where corner/card/shot
-depth is exactly where API-Football is thinnest. Whether the paid tier is worth anything for THIS
-project therefore cannot be answered from a coverage page — it must be **probed on the free tier
-first** (§7).
+openfootball covers the top divisions of England, Germany, Spain, Italy and France. Our backlog is
+not made of those. Its actual composition:
+
+```
+ 707  League 2932            <- unnamed/obfuscated competition
+  69  UEFA Conference League
+  49  League Cup
+  49  U20 Paulista
+  43  Regional Football Leagues
+  33  Kolmonen                <- Finnish 3rd tier
+  31  Premier League          <- the ONLY openfootball-covered league present
+  31  League 11070
+```
+
+Even the 32 "covered" fixtures are doubtful: our `Bundesliga` entries are the **Austrian** league
+(LASK vs Grazer AK), which openfootball does not carry, and `Premier League` is ambiguous across
+countries. Real coverage is at or near zero.
+
+**The binding constraint is the BACKLOG's composition, not the providers.** Free and public sources
+cover major leagues; this dataset is dominated by obscure ones because the scanner takes whatever
+eljam3ia lists on the day. No amount of provider-shopping fixes that.
+
+### What follows
+
+1. **Retro-settlement of the full 2,818-fixture backlog is not reachable** by any free or public
+   source. It would need a paid tier with broad coverage, and even then the 707-fixture `League
+   2932` block may be unidentifiable.
+2. **The tier-1 subset (246 fixtures / 9,607 selections) remains the only tractable target**, and
+   needs a paid tier or patient manual lookup.
+3. **apifootball.com is the one untested option.** It publishes half-time fields, which is the
+   requirement that matters most (53% of legs need HT). One request against the golden record would
+   settle it. Note its auth puts the key in a QUERY STRING, which is weaker than a header.
+4. **Nothing here blocks the daily path.** A slate built and settled manually needs no provider at
+   all, and is what produces the project's first real numbers.
+
+### Golden record for any future provider test
+
+The one hand-verified, independently-sourced result this project owns:
+
+> **Central Cordoba 0-2 Atletico Tucuman, HT 0-0** — Argentine Primera, kickoff 2026-07-31T00:15Z.
+> FOX Sports boxscore; goals at 63' and 90+1', internally consistent with a goalless first half.
+
+Any candidate source must reproduce **both** FT and HT before anything is built on it. This exists
+because a lookup for this same fixture returned *Atletico Tucuman 1-1 Central Cordoba, 19 July
+**2025*** — a different match from a different season, presented as the fixture. Score lookup at
+volume is the hard part of any retro plan, and it fails silently.
 
 ## Design — extend the data, not `grade_leg`'s contract
 
@@ -151,60 +215,3 @@ Design:
   provider is one more implementation of the seam, not a rewrite.
 - Per-family reporting only, never a blended aggregate; new stat families slot into the existing
   per-family + calibration tables with real numbers once wired.
-
-## 7. Decision gate — the free tier decides whether the spend is worth it
-
-**Do not frame this as "pick a provider now."** The real question a paid stats tier has to answer is
-**not** "does it cover the slate" but: *once corners/cards/shots legs actually become gradeable, do
-their per-family calibration gaps (hit% − implied%) differ enough from the goals-derived families to
-justify paying?* If the stat families calibrate the same as the goals families (the odds are equally
-(in)efficient), there is nothing to buy — the ~73% score-derivable measurement already tells the
-story. That question is **unanswerable until some real stat legs are graded**, and grading real stat
-legs at zero cost is *exactly* what API-Football's free past-seasons tier is for. So the free tier is
-the **decision gate**, not one option among three. "Pay live" and "stay score-only" are the two
-**post-gate** outcomes.
-
-### Gate step 0 — STAT-DEPTH PROBE (zero cost, blocks everything; a verification gate like the score tranches)
-
-Before endorsing any signup, **prove the free tier actually has the stats for THESE leagues** — not
-just that the leagues are listed. With a free key (the user creates it; this design never requests or
-enters credentials):
-1. Call `/leagues` for each league the corpus actually scrapes and read the per-season **coverage
-   flags** (`fixtures.statistics_fixtures`, `fixtures.statistics_players`, `fixtures.events`,
-   `lineups`) for the free-accessible past season(s).
-2. For a handful of real fixtures in those leagues+season, call `/fixtures/statistics` and
-   `/fixtures/players` and **inspect the payload**: are `Corner Kicks`, `Yellow/Red Cards`, `Total
-   Shots`, and per-player fields actually **present and non-empty**?
-
-Because a "covered" league can return a `200` with an empty array, the flag alone is not proof — the
-sample payload is. **If the target leagues' stat fields are empty/absent on the free tier, the gate
-FAILS and the finding is decisive: don't pay** — you can't even validate stat grading here, and the
-paid tier for these specific (often lower-division South-American) leagues is the same data source.
-Fall through to score-only. Record which leagues passed/failed; coverage is per-league, so a mixed
-result means "stats only for the top-flight subset."
-
-### Gate step 1 — validate the grader on free historical stat data
-
-If step 0 passes for a workable set of leagues: build the adapter (plan Tasks 1–4) against the free
-historical season, settle a historical stat slate through `settle.py`, and let it write graded stat
-legs into `output/backtest_legs.csv`. This exercises name-matching + stat-market grading end-to-end
-at zero cost.
-
-### Gate step 2 — read the per-family gaps
-
-Run `calibrate.py` on that historical `backtest_legs.csv`. Now the `corners`, `cards`, `player`
-families show **real** hit% vs implied% vs gap alongside the goals families. This is the number the
-whole spend decision hinges on.
-
-### Gate step 3 — THEN decide (post-validation branches)
-
-- **Pay for a live tier** *iff* step 2 shows the stat families' gaps are materially different from the
-  goals families (there is edge/signal specific to stat markets worth settling on live slates). The
-  adapter is identical; only the season/plan key changes.
-- **Stay score-only** if step 0 fails (no stat depth for these leagues) OR step 2 shows stat-family
-  gaps track the goals families (nothing to buy). This loses nothing already built — the per-family
-  calibration on the ~73% score-derivable legs remains the project's measurement, and the stat
-  families simply stay `gradeable = 0`.
-
-The only thing that needs the user right now is **a free API-Football key to run gate step 0** (and
-the willingness to run the probe). Everything downstream follows from what the probe returns.
