@@ -56,15 +56,21 @@ def calibrate(rows: list[dict]) -> dict[str, dict]:
             if odd > 0:                       # a graded leg with no valid odd counts toward the
                 d["inv_sum"] += 1.0 / odd     # hit rate but cannot contribute an implied prob
                 d["inv_n"] += 1
+                d["ret_sum"] = d.get("ret_sum", 0.0) + (odd if verdict == "won" else 0.0)
     out: dict[str, dict] = {}
     for fam, d in acc.items():
         graded, inv_n = d["graded"], d["inv_n"]
         hit = 100.0 * d["won"] / graded if graded else None
         implied = 100.0 * d["inv_sum"] / inv_n if inv_n else None
         gap = (hit - implied) if (hit is not None and implied is not None) else None
+        # ROI: stake 1 unit on every graded leg with a valid odd; profit per unit staked. Voids are
+        # a returned stake (EV 0) and unsettleable legs were never staked -- both excluded, keeping
+        # ROI on the SAME leg set as hit% and implied%. This is the money answer: a family only
+        # wins money long-run if roi > 0, which requires hit% ABOVE implied%, not a high hit%.
+        roi = 100.0 * (d.get("ret_sum", 0.0) - inv_n) / inv_n if inv_n else None
         out[fam] = {"n": d["n"], "distinct": len(distinct[fam]), "matches": len(matches[fam]),
                     "graded": graded, "won": d["won"], "hit_pct": hit, "implied_pct": implied,
-                    "gap": gap}
+                    "gap": gap, "roi_pct": roi}
     return out
 
 
@@ -103,23 +109,24 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
     odds -- not a sample estimate -- and stays too. Only hit% and gap are withheld.
     """
     print("Per-family calibration (hit% = won/graded; implied% = mean 1/odd over graded legs; "
-          "gap = hit - implied, in pts).")
+          "gap = hit - implied, in pts; roi% = flat-stake profit per unit).")
     print("No blended aggregate: families differ in sample size and the gradeable subset is biased.\n")
     print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'matches':>7} {'graded':>7} {'won':>5} "
-          f"{'hit%':>5} {'impl%':>6} {'gap':>6}")
+          f"{'hit%':>5} {'impl%':>6} {'gap':>6} {'roi%':>6}")
     few_legs = few_matches = 0
     # sort by number of graded legs (the calibration signal), then by n
     for fam in sorted(cal, key=lambda k: (-cal[k]["graded"], -cal[k]["n"])):
         c = cal[fam]
-        hit, gap = c["hit_pct"], c["gap"]
+        hit, gap, roi = c["hit_pct"], c["gap"], c["roi_pct"]
         if hit is not None and (c["graded"] < min_n or c["matches"] < min_matches):
             if c["graded"] < min_n:
                 few_legs += 1
             if c["matches"] < min_matches:
                 few_matches += 1
-            hit = gap = None                     # sample cannot support a rate
+            hit = gap = roi = None               # sample cannot support a rate
         print(f"  {fam:<12} {c['n']:>5} {c['distinct']:>8} {c['matches']:>7} {c['graded']:>7} "
-              f"{c['won']:>5} {_fmt_pct(hit)} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)}")
+              f"{c['won']:>5} {_fmt_pct(hit)} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)} "
+              f"{_fmt_gap(roi)}")
     if few_legs or few_matches:
         print(f"\n  hit%/gap withheld where the sample cannot support a rate "
               f"({few_legs} family/families under {min_n} graded legs, "
