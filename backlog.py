@@ -240,12 +240,18 @@ def main() -> int:
                     help="per-date verified results; a cached fixture is never re-fetched")
     ap.add_argument("--worklist", default=None,
                     help="print the fixtures still needing a score for this date (YYYY-MM-DD)")
+    ap.add_argument("--pool", default="output/backtest_pool_legs.csv",
+                    help="existing pool log; triples it already MEASURES are excluded from the "
+                         "retro-load so the live slates are not double-counted")
     ap.add_argument("--finished-before", default=None, dest="finished_before",
                     help="drop fixtures kicking off at or after this UTC instant -- they have not "
                          "finished, so they have no result to look up")
     args = ap.parse_args()
 
     sels = dedupe_selections(backlog_selections(args.output))
+    raw = len(sels)
+    loaded = already_loaded_triples(args.pool)
+    sels = exclude_already_loaded(sels, loaded)
     scored = set()
     cache = Path(args.cache)
     if cache.exists():
@@ -260,8 +266,8 @@ def main() -> int:
             print(name)
         return 0
 
-    print(f"backlog: {len(sels)} distinct (match, market, selection) triples across "
-          f"{len({s['match'] for s in sels})} fixtures")
+    print(f"backlog: {raw} distinct triples after dedupe; {raw - len(sels)} already MEASURED in "
+          f"{args.pool} -> {len(sels)} to load, across {len({s['match'] for s in sels})} fixtures")
     print(f"already scored: {len(scored)} fixture(s) in {cache}")
     print(f"\n{'date':<14}{'fixtures still needed':>22}")
     for day, names in wl.items():
