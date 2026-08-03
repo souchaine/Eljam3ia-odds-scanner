@@ -123,6 +123,73 @@ def worklist_by_date(selections: list[dict], already_scored: set,
     return {day: sorted(names) for day, names in sorted(grouped.items()) if names}
 
 
+GRADED_VERDICTS = ("won", "lost", "void")
+
+
+def already_loaded_triples(pool_path) -> dict[tuple, str]:
+    """(match, market, selection) -> verdict, for everything already in the pool log.
+
+    Deduping only WITHIN the backlog misses the overlap with the LIVE slates: `run_20260801_0900`
+    is in the backlog while `run_20260801_1007` is already settled, and they share fixtures.
+    """
+    path = Path(pool_path)
+    if not path.exists():
+        return {}
+    out = {}
+    for r in csv.DictReader(path.read_text(encoding="utf-8-sig").splitlines()):
+        if r.get("match"):
+            out[(r["match"], r.get("market"), r.get("selection"))] = r.get("verdict", "")
+    return out
+
+
+def exclude_already_loaded(selections: list[dict], loaded: dict[tuple, str]) -> list[dict]:
+    """Drop backlog rows the pool log already MEASURES; keep those it merely records as unknown.
+
+    A triple already carrying a real verdict (won/lost/void) is the same observation -- re-adding
+    it inflates `graded` and narrows the error bars, the confident-direction failure.
+
+    A triple recorded as `unsettleable` is different: that row carries no measurement content at
+    all (calibrate excludes it from hit%, implied% and roi), so replacing it with a graded row
+    strictly adds information and cannot bias anything. It is kept here and the stale row is purged
+    by `purge_unsettleable` before the append, so the file never holds the triple twice.
+    """
+    return [s for s in selections
+            if loaded.get((s.get("match"), s.get("market"), s.get("selection")), "")
+            not in GRADED_VERDICTS]
+
+
+def purge_unsettleable(pool_path, triples: set) -> int:
+    """Remove `unsettleable` rows for the given triples; returns how many went.
+
+    Only ever deletes non-measurements. A row with a real verdict is a measurement and is never
+    touched, however tempting it would be to "refresh" it.
+    """
+    path = Path(pool_path)
+    if not path.exists():
+        return 0
+    rows = list(csv.reader(path.read_text(encoding="utf-8-sig").splitlines()))
+    if not rows:
+        return 0
+    header, body = rows[0], rows[1:]
+    idx = {name: header.index(name) for name in ("match", "market", "selection", "verdict")
+           if name in header}
+    if len(idx) < 4:
+        return 0
+    kept, removed = [], 0
+    for row in body:
+        key = (row[idx["match"]], row[idx["market"]], row[idx["selection"]])
+        if row[idx["verdict"]] == "unsettleable" and key in triples:
+            removed += 1
+            continue
+        kept.append(row)
+    if removed:
+        with path.open("w", newline="", encoding="utf-8-sig") as fh:
+            w = csv.writer(fh)
+            w.writerow(header)
+            w.writerows(kept)
+    return removed
+
+
 def _scrape_finished(meta_path: Path) -> str | None:
     """The run's finish time: the latest timestamp anywhere in the matrix's meta sidecar."""
     if not meta_path.exists():
