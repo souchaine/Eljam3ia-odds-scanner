@@ -58,11 +58,24 @@ def test_sign_history_flags_a_stable_sign():
     assert sign_history(calibrate_by_run(rows), "main") == "stable -"
 
 
-def test_sign_history_is_insufficient_when_a_run_is_below_the_floors():
+def test_a_below_floor_run_is_ignored_not_disqualifying():
     # runB has plenty of matches but only 4 graded legs -- under the leg floor, so its sign is not
-    # a fact and must not be used to claim a family "held" or "reversed".
+    # a fact. It must be IGNORED, not treated as voiding the runs that do qualify: with 23 slates
+    # in the log, "every slate must clear the floors" makes every family read insufficient forever.
+    rows = (_spread("main", 30, 6, 3, "runA") + _spread("main", 30, 6, 3, "runC")
+            + _spread("main", 4, 4, 3, "runB"))
+    assert sign_history(calibrate_by_run(rows), "main") == "stable -"
+
+
+def test_sign_history_needs_two_qualifying_runs():
     rows = _spread("main", 30, 6, 3, "runA") + _spread("main", 4, 4, 3, "runB")
     assert sign_history(calibrate_by_run(rows), "main") == "insufficient"
+
+
+def test_reversal_is_detected_among_qualifying_runs_only():
+    rows = (_spread("htft", 30, 6, 1, "runA") + _spread("htft", 30, 6, 3, "runB")
+            + _spread("htft", 3, 3, 1, "runC"))          # runC below floor, must not mask it
+    assert sign_history(calibrate_by_run(rows), "htft") == "reversed"
 
 
 def test_sign_history_is_insufficient_for_a_single_run():
@@ -73,15 +86,17 @@ def test_sign_history_is_insufficient_for_a_single_run():
 
 # ---- the printed table -------------------------------------------------------------------------
 
-def test_comparison_prints_a_column_per_run_and_withholds_below_floors(capsys):
+def test_comparison_counts_slates_and_excludes_those_below_floors(capsys):
+    # the per-slate table must stay readable as slates accumulate: with 23 in the log a
+    # column-per-slate layout is unreadable, so this reports counts and a spread instead.
     rows = _spread("main", 30, 6, 2, "runA") + _spread("main", 8, 8, 2, "runB")
     print_run_comparison(calibrate_by_run(rows))
     out = capsys.readouterr().out
-    assert "runA" in out and "runB" in out
     row = [l for l in out.splitlines() if l.strip().startswith("main")][0]
-    # runA clears both floors (30 legs / 6 matches) and prints a gap; runB (8 legs) must not
-    assert row.count("-") >= 1
-    assert "insufficient" in row, "a floored-out run cannot support a survival claim"
+    fields = row.split()
+    assert fields[1] == "2", "two slates contain the family"
+    assert fields[2] == "1", "only one of them clears both floors"
+    assert "insufficient" in row, "one qualifying slate cannot support a survival claim"
 
 
 def test_comparison_never_prints_a_blended_aggregate(capsys):
