@@ -39,9 +39,9 @@ A positive finding requires **BOTH**:
    the SHORT end, not scattered.
 
 **A single band clearing its interval without the pattern is a multiple-comparisons artifact and
-must be reported as such, not as an edge.** With 9 bands tested at 95% confidence, roughly one
-false positive is expected by chance alone. This rule is what makes the test survive that, and it
-is recorded here so it cannot be relaxed once a tempting band appears.
+must be reported as such, not as an edge.** With 7 bands tested at 95% confidence, roughly one
+false positive in three runs is expected by chance alone. This rule is what makes the test survive
+that, and it is recorded here so it cannot be relaxed once a tempting band appears.
 
 ### What the null looks like
 
@@ -53,12 +53,25 @@ outcome and gets reported as plainly as a positive one would.
 
 Fixed now so they cannot be tuned post hoc:
 
-`1.01–1.10 · 1.10–1.20 · 1.20–1.30 · 1.30–1.40 · 1.40–1.50 · 1.50–1.75 · 1.75–2.00 · 2.00–2.50 ·
-2.50–3.00`
+`1.20–1.30 · 1.30–1.40 · 1.40–1.50 · 1.50–1.75 · 1.75–2.00 · 2.00–2.50 · 2.50–3.00`
 
 Wider at the long end deliberately: a 3.00 shot hits ~33% of the time and needs far more data than
-a 1.10 favourite at ~91% to pin its rate to the same precision. Expect the favourite end to reach a
+a 1.25 favourite at ~80% to pin its rate to the same precision. Expect the short end to reach a
 verdict months before the longshot end.
+
+**The 1.01–1.20 bands were deliberately excluded (user decision, 2026-08-03), and the cost is
+recorded here rather than discovered later.** That is the range where favourite–longshot bias
+predicts the effect is STRONGEST, and where precision arrives fastest — ROI variance per unit is
+`p(1−p)·o²`, roughly 0.10 at odds 1.10 against 2.0 at 3.00, so the short end pins its interval
+about 20× faster. Excluding it means the test now looks hardest where the answer is slowest, and a
+true short-odds edge would go undetected by construction. This is a limitation of the test, not a
+finding about the market.
+
+**The SCAN nevertheless runs from 1.01.** Rows below 1.20 are collected and settled but not
+analysed under the pre-registered bands. Collecting them is free inside the same scan, and this
+entire project spent a session retro-settling a backlog precisely because past odds cannot be
+backfilled. If the short end is ever revisited, the data will already exist — and re-analysing it
+then is an explicitly post-hoc test, which must be labelled as such.
 
 ## 3. Approach: a measurement-only scan, structurally isolated from betting
 
