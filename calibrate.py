@@ -141,6 +141,80 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
               "accumulate several real settlements before drawing calibration conclusions.")
 
 
+NO_RUN = "(no run)"
+
+
+def calibrate_by_run(rows: list[dict]) -> dict[str, dict[str, dict]]:
+    """Same per-family stats as `calibrate`, but partitioned by the slate (`run_dir`) they came from.
+
+    The combined table averages slates together, which is exactly where a fluke hides: the mean of
+    a +28 and a -1 is a modest +11 that reads like a weak edge rather than the noise it is. A family
+    that is absent from a slate is ABSENT from that slate's dict -- never a 0% row.
+    """
+    partitions: dict[str, list[dict]] = {}
+    for r in rows:
+        partitions.setdefault(r.get("run_dir") or NO_RUN, []).append(r)
+    return {run: calibrate(rs) for run, rs in partitions.items()}
+
+
+def _clears_floors(c: dict, min_n: int, min_matches: int) -> bool:
+    """A slate's cell is reportable only under the same two floors the combined table uses."""
+    return (c["gap"] is not None and c["graded"] >= min_n and c["matches"] >= min_matches)
+
+
+def sign_history(by_run: dict[str, dict[str, dict]], family: str,
+                 min_n: int = DEFAULT_MIN_N, min_matches: int = DEFAULT_MIN_MATCHES) -> str:
+    """Did this family's gap keep its sign across slates? One of:
+
+        "stable +" / "stable -"  every reportable slate agreed on the direction
+        "reversed"               slates disagreed -- the gap is noise, whatever the combined row says
+        "insufficient"           fewer than two slates clear the floors, so nothing can be claimed
+
+    A slate under the floors is NOT evidence of anything, so it cannot be used to say a gap "held".
+    This deliberately makes "insufficient" the common answer early on; that is the honest answer.
+    """
+    cells = [c[family] for c in by_run.values() if family in c]
+    if len(cells) < 2 or not all(_clears_floors(c, min_n, min_matches) for c in cells):
+        return "insufficient"
+    gaps = [c["gap"] for c in cells]
+    if all(g >= 0 for g in gaps):
+        return "stable +"
+    if all(g <= 0 for g in gaps):
+        return "stable -"
+    return "reversed"
+
+
+def print_run_comparison(by_run: dict[str, dict[str, dict]], min_n: int = DEFAULT_MIN_N,
+                         min_matches: int = DEFAULT_MIN_MATCHES) -> None:
+    """One row per family, one column per slate, plus whether the sign survived.
+
+    Read this BEFORE the combined table. A family marked `reversed` has no edge, however good its
+    combined gap looks -- it changed direction the moment new matches arrived.
+    """
+    runs = sorted(by_run)
+    families = sorted({f for c in by_run.values() for f in c},
+                      key=lambda f: -sum(c.get(f, {}).get("graded", 0) for c in by_run.values()))
+    print("Per-slate calibration — does a family's gap SURVIVE the next slate?")
+    print("No blended aggregate: each column is one slate, floored independently.\n")
+    print(f"  {'family':<12}" + "".join(f"{r[-13:]:>26}" for r in runs) + "  history")
+    for fam in families:
+        line = f"  {fam:<12}"
+        for run in runs:
+            c = by_run[run].get(fam)
+            if c is None:
+                line += f"{'-':>26}"
+            elif _clears_floors(c, min_n, min_matches):
+                line += f"   gap{c['gap']:+6.1f} roi{c['roi_pct']:+6.1f} m{c['matches']:>3}"
+            else:
+                line += f"   gap{'-':>6} roi{'-':>6} m{c['matches']:>3}"
+        print(line + f"  {sign_history(by_run, fam, min_n, min_matches)}")
+    print("\n  reversed     = the sign flipped between slates; the gap is noise regardless of how "
+          "the\n                 combined row reads. This is the column that falsifies an edge.")
+    print("  insufficient = fewer than two slates clear both floors "
+          f"({min_n} graded legs AND {min_matches} matches).")
+    print("  stable +/-   = direction held so far. NOT significance — check the combined band too.")
+
+
 def main() -> int:
     for _stream in (sys.stdout, sys.stderr):   # tolerate non-cp1252 names on Windows
         try:
@@ -157,6 +231,9 @@ def main() -> int:
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N, dest="min_n",
                     help=f"minimum graded legs before a family's hit%%/gap is reported "
                          f"(default {DEFAULT_MIN_N}); below it, counts show but the rate does not")
+    ap.add_argument("--by-run", action="store_true", dest="by_run",
+                    help="ALSO break the gaps out per slate and flag families whose sign reversed "
+                         "-- the combined table averages a fluke and a nothing into a weak edge")
     args = ap.parse_args()
 
     legs = Path(args.legs)
@@ -168,6 +245,9 @@ def main() -> int:
     if not rows:
         print(f"{legs} has no leg rows yet.")
         return 1
+    if args.by_run:
+        print_run_comparison(calibrate_by_run(rows), min_n=args.min_n, min_matches=args.min_matches)
+        print()
     print_report(calibrate(rows), min_n=args.min_n, min_matches=args.min_matches)
     return 0
 
