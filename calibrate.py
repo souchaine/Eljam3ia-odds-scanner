@@ -37,15 +37,20 @@ def calibrate(rows: list[dict]) -> dict[str, dict]:
     acc: dict[str, dict] = {}
     distinct: dict[str, set] = {}
     matches: dict[str, set] = {}
+    dates: dict[str, set] = {}
     for r in rows:
         fam = r.get("family", "") or "other"
         d = acc.setdefault(fam, {"n": 0, "graded": 0, "won": 0, "inv_sum": 0.0, "inv_n": 0})
         d["n"] += 1
         distinct.setdefault(fam, set()).add((r.get("match"), r.get("market"), r.get("selection")))
         matches.setdefault(fam, set())
+        dates.setdefault(fam, set())
         verdict = r.get("verdict")
         if verdict in ("won", "lost"):
             matches[fam].add(r.get("match"))     # matches contributing GRADED legs
+            day = (r.get("kickoff_date") or "").strip()
+            if day:                              # blank = unknown, NOT a distinct day
+                dates[fam].add(day)
             d["graded"] += 1
             if verdict == "won":
                 d["won"] += 1
@@ -69,8 +74,8 @@ def calibrate(rows: list[dict]) -> dict[str, dict]:
         # wins money long-run if roi > 0, which requires hit% ABOVE implied%, not a high hit%.
         roi = 100.0 * (d.get("ret_sum", 0.0) - inv_n) / inv_n if inv_n else None
         out[fam] = {"n": d["n"], "distinct": len(distinct[fam]), "matches": len(matches[fam]),
-                    "graded": graded, "won": d["won"], "hit_pct": hit, "implied_pct": implied,
-                    "gap": gap, "roi_pct": roi}
+                    "dates": len(dates[fam]), "graded": graded, "won": d["won"], "hit_pct": hit,
+                    "implied_pct": implied, "gap": gap, "roi_pct": roi}
     return out
 
 
@@ -111,8 +116,8 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
     print("Per-family calibration (hit% = won/graded; implied% = mean 1/odd over graded legs; "
           "gap = hit - implied, in pts; roi% = flat-stake profit per unit).")
     print("No blended aggregate: families differ in sample size and the gradeable subset is biased.\n")
-    print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'matches':>7} {'graded':>7} {'won':>5} "
-          f"{'hit%':>5} {'impl%':>6} {'gap':>6} {'roi%':>6}")
+    print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'matches':>7} {'dates':>5} {'graded':>7} "
+          f"{'won':>5} {'hit%':>5} {'impl%':>6} {'gap':>6} {'roi%':>6}")
     few_legs = few_matches = 0
     # sort by number of graded legs (the calibration signal), then by n
     for fam in sorted(cal, key=lambda k: (-cal[k]["graded"], -cal[k]["n"])):
@@ -124,9 +129,9 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
             if c["matches"] < min_matches:
                 few_matches += 1
             hit = gap = roi = None               # sample cannot support a rate
-        print(f"  {fam:<12} {c['n']:>5} {c['distinct']:>8} {c['matches']:>7} {c['graded']:>7} "
-              f"{c['won']:>5} {_fmt_pct(hit)} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)} "
-              f"{_fmt_gap(roi)}")
+        print(f"  {fam:<12} {c['n']:>5} {c['distinct']:>8} {c['matches']:>7} "
+              f"{c.get('dates', 0):>5} {c['graded']:>7} {c['won']:>5} {_fmt_pct(hit)} "
+              f"{_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)} {_fmt_gap(roi)}")
     if few_legs or few_matches:
         print(f"\n  hit%/gap withheld where the sample cannot support a rate "
               f"({few_legs} family/families under {min_n} graded legs, "
@@ -134,6 +139,11 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
         print("  Legs on the same fixture are CORRELATED -- they all resolve off one scoreline -- so "
               "the number of\n  distinct matches, not the number of legs, governs the error bars. "
               "(--min-n / --min-matches to change.)")
+    if any(c.get("dates", 0) for c in cal.values()):
+        print("\n  dates = distinct MATCH-DAYS contributing graded legs. Matches cluster inside "
+              "dates: on one\n  match-day, market-wide pricing conditions are shared. So the true "
+              "band is WIDER than the one\n  implied by `matches` alone — read every gap above as "
+              "less precise than its match count suggests.")
     total_graded = sum(c["graded"] for c in cal.values())
     if total_graded < 200:
         leg_word = "leg" if total_graded == 1 else "legs"
@@ -173,8 +183,9 @@ def sign_history(by_run: dict[str, dict[str, dict]], family: str,
     A slate under the floors is NOT evidence of anything, so it cannot be used to say a gap "held".
     This deliberately makes "insufficient" the common answer early on; that is the honest answer.
     """
-    cells = [c[family] for c in by_run.values() if family in c]
-    if len(cells) < 2 or not all(_clears_floors(c, min_n, min_matches) for c in cells):
+    cells = [c[family] for c in by_run.values()
+             if family in c and _clears_floors(c[family], min_n, min_matches)]
+    if len(cells) < 2:
         return "insufficient"
     gaps = [c["gap"] for c in cells]
     if all(g >= 0 for g in gaps):
@@ -191,23 +202,28 @@ def print_run_comparison(by_run: dict[str, dict[str, dict]], min_n: int = DEFAUL
     Read this BEFORE the combined table. A family marked `reversed` has no edge, however good its
     combined gap looks -- it changed direction the moment new matches arrived.
     """
-    runs = sorted(by_run)
     families = sorted({f for c in by_run.values() for f in c},
                       key=lambda f: -sum(c.get(f, {}).get("graded", 0) for c in by_run.values()))
     print("Per-slate calibration — does a family's gap SURVIVE the next slate?")
-    print("No blended aggregate: each column is one slate, floored independently.\n")
-    print(f"  {'family':<12}" + "".join(f"{r[-13:]:>26}" for r in runs) + "  history")
+    print("No blended aggregate: each slate is floored independently; slates under the floors are\n"
+          "ignored as evidence rather than treated as disqualifying.\n")
+    print(f"  {'family':<12}{'slates':>7}{'ok':>4}{'+':>4}{'-':>4}{'worst':>8}{'best':>7}"
+          f"{'median':>8}  history")
     for fam in families:
-        line = f"  {fam:<12}"
-        for run in runs:
-            c = by_run[run].get(fam)
-            if c is None:
-                line += f"{'-':>26}"
-            elif _clears_floors(c, min_n, min_matches):
-                line += f"   gap{c['gap']:+6.1f} roi{c['roi_pct']:+6.1f} m{c['matches']:>3}"
-            else:
-                line += f"   gap{'-':>6} roi{'-':>6} m{c['matches']:>3}"
-        print(line + f"  {sign_history(by_run, fam, min_n, min_matches)}")
+        cells = [c[fam] for c in by_run.values() if fam in c]
+        ok = [c for c in cells if _clears_floors(c, min_n, min_matches)]
+        gaps = sorted(c["gap"] for c in ok)
+        pos = sum(1 for g in gaps if g > 0)
+        med = f"{gaps[len(gaps) // 2]:+.1f}" if gaps else "-"
+        worst = f"{gaps[0]:+.1f}" if gaps else "-"
+        best = f"{gaps[-1]:+.1f}" if gaps else "-"
+        print(f"  {fam:<12}{len(cells):>7}{len(ok):>4}{pos:>4}{len(gaps) - pos:>4}"
+              f"{worst:>8}{best:>7}{med:>8}  "
+              f"{sign_history(by_run, fam, min_n, min_matches)}")
+    print("\n  slates = slates containing the family; ok = those clearing BOTH floors "
+          f"({min_n} graded legs\n  AND {min_matches} matches). +/- count the sign of the gap "
+          "among those. A family that is\n  negative in most qualifying slates has no edge, "
+          "however good one slate looked.")
     print("\n  reversed     = the sign flipped between slates; the gap is noise regardless of how "
           "the\n                 combined row reads. This is the column that falsifies an edge.")
     print("  insufficient = fewer than two slates clear both floors "

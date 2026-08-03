@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "score-bridge",
+      "runtimeExecutable": "py",
+      "runtimeArgs": [
+        "tools/score_bridge.py",
+        "--port",
+        "8787",
+        "--staging",
+        "C:/Users/user/OneDrive - Ministere de l'Enseignement Superieur et de la Recherche Scientifique/Desktop/kora/output/.retro_staging"
+      ],
+      "port": 8787
+    }
+  ]
+}

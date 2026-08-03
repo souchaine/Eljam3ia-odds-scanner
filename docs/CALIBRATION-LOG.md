@@ -61,6 +61,70 @@ trap on slate 1.
 
 ---
 
+## Backlog retro-settlement — loaded 2026-08-03
+
+**This is the entry that answers the project's question.**
+
+432 fixtures retro-settled from 21 match-days across the previously unsettled backlog, taking the
+pool from **62 → 481 graded matches** and 1,475 → **8,901 graded observations**. Design and method:
+[`2026-08-03-backlog-retro-settlement-design.md`](superpowers/specs/2026-08-03-backlog-retro-settlement-design.md).
+
+Provenance, stated plainly:
+
+- 2,508 finished backlog fixtures; **611 joined (24.4%)** — 602 unique-exact, 9 orthographic
+  aliases, 1 ambiguous **rejected**, 1,896 unmatched **skipped**. The low rate is worldfootball's
+  coverage, not a matching failure: whole competitions score zero (U20 Paulista, Kolmonen, Primera
+  C, USL League Two, China League 2, Calcutta Premier).
+- 100% of fetched reports validated for internal consistency; **432 verified, 178 rejected** —
+  including **13 penalty shootouts** (the headline score is not the result) and 13 fixtures whose
+  own published FT or HT contradicts their goal timeline.
+- Independent cross-check against fotmob: 29 sampled (8 aliases = 100%, 21 random = 5.0%),
+  **20 checked, 20/20 agreement**, 9 not carried by the second source and recorded as NOT CHECKED.
+  Full-time only — half-time is corroborated by the internal goal-minute check, not re-read.
+- **Zero duplicate triples** across all 14,363 rows, verified on the loaded file. 1,846 stale
+  `unsettleable` rows were purged and replaced by real measurements.
+
+### Cluster-robust result (clustering on match-day)
+
+Legs cluster in matches and matches cluster in dates, so the band is computed between match-days —
+the conservative reading, not the flattering one.
+
+| family | legs | dates | gap | ±band | roi% | ±band | verdict |
+|---|---|---|---|---|---|---|---|
+| 1st half | 2140 | 22 | −3.6 | 2.9 | −5.1 | 4.1 | **clears** |
+| or-combo | 1973 | 21 | −4.0 | 1.4 | −5.6 | 1.9 | **clears** |
+| main | 1580 | 22 | −6.0 | 2.5 | −8.4 | 3.5 | **clears** |
+| 2nd half | 1377 | 22 | −4.9 | 2.9 | −6.7 | 4.1 | **clears** |
+| combo | 753 | 22 | −7.4 | 3.5 | −10.6 | 4.9 | **clears** |
+| both halves | 725 | 22 | −3.6 | 3.3 | −5.0 | 4.6 | **clears** |
+| htft | 170 | 22 | −6.3 | 8.7 | −8.2 | 11.9 | noise |
+| multigoals | 111 | 20 | −5.6 | 9.3 | −7.3 | 12.3 | noise |
+
+**Six of eight families now clear their band, and every single one is negative.** No family is
+positive at any sample size. The measured loss of −5% to −11% per unit staked is the bookmaker's
+margin, intact and now visible.
+
+This is exactly the outcome §9 of the design committed to in advance, written before the data
+existed: *"the most likely honest result is that every family converges near zero, because
+eljam3ia prices these markets roughly correctly."*
+
+### `both halves` — the edge that wasn't
+
+The only family positive in both live slates (+3.2, +2.1) reads **−3.6 / roi −5.0 over 374
+matches**, and clears its band on the negative side. Per-slate it is negative in 8 of the 12 slates
+that qualify. The project's single edge candidate did not survive a 6× larger sample.
+
+Per-slate signs across every qualifying slate (`--by-run`):
+
+| family | qualifying slates | gap > 0 | gap < 0 | history |
+|---|---|---|---|---|
+| 1st half | 16 | 5 | 11 | reversed |
+| or-combo | 15 | 3 | 12 | reversed |
+| main | 15 | 2 | 13 | reversed |
+| 2nd half | 14 | 3 | 11 | reversed |
+| combo | 12 | **0** | 12 | stable − |
+| both halves | 12 | 4 | 8 | reversed |
+
 ## Running table
 
 `gap` = hit% − implied% (points). `roi` = flat-stake profit per unit. `m` = distinct matches.
