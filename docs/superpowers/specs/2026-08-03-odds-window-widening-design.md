@@ -112,12 +112,38 @@ produced the section-1 numbers had no tests.
 Unchanged and still binding: per-family reporting only, no blended aggregate, `implied%` always
 visible, an empty band shows `-`, and the floors are never lowered to make numbers appear.
 
-## 5. Volume
+## 5. Volume — MEASURED, and the estimate was wrong
 
-1.25–1.50 yields ~11,900 qualifying cells per 743-event scan. 1.01–3.00 covers far more of the
-probability space — expect roughly 5–10× the rows per scan, taking `backtest_pool_legs.csv` from
-14k rows to six figures within weeks. The dedupe invariant, `kickoff_date` migration and
-`purge_unsettleable` path all already handle it; this is a note, not a blocker.
+The estimate above was 5–10× the rows per scan. **The measured figure is ~1.4× on the rows that
+matter.** First wide scan, `run_20260803_1504`, 128 events:
+
+| | narrow 1.25–1.50 | wide 1.01–3.00 |
+|---|---|---|
+| qualifying cells | 2,435 | 8,325 (3.4×) |
+| **gate-eligible legs** | ~1,200 | **1,630 (1.4×)** |
+
+The settleability gate is the binding filter — only **20%** of wide-window cells are gate-eligible,
+because the extra selections at long odds sit disproportionately in markets the grader cannot
+settle from a scoreline. Widening the window therefore costs far less than the raw cell count
+suggests, and `backtest_pool_legs.csv` will grow at roughly the current rate, not explosively.
+
+**All seven bands populate, and evenly**, which is what makes the test runnable at all:
+
+| band | gated legs | fixtures |
+|---|---|---|
+| 1.20–1.30 | 198 | 66 |
+| 1.30–1.40 | 147 | 51 |
+| 1.40–1.50 | 119 | 52 |
+| 1.50–1.75 | 226 | 78 |
+| 1.75–2.00 | 152 | 79 |
+| 2.00–2.50 | 267 | 100 |
+| 2.50–3.00 | 249 | 87 |
+| *(outside — collected, not analysed)* | 272 | — |
+
+~13 gate-eligible legs per fixture. Every band clears the 20-leg floor from a single scan; the
+binding constraint is the **5-match floor and the number of match-days**, since the cluster-robust
+interval needs at least two days and is only meaningful across many. Expect useful intervals in
+weeks, not days — and only for fixtures worldfootball actually covers (~24% of the backlog).
 
 ## 6. Out of scope
 
