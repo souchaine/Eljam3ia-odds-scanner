@@ -910,7 +910,44 @@ def append_backtest_legs(path: Path, run_dir: str, result: dict) -> None:
                         r["market"], r["selection"], f"{r['odd']:g}", r["verdict"]])
 
 
-def append_backtest_pool_legs(path: Path, run_dir: str, records: list[dict]) -> None:
+POOL_LEGS_HEADER = ["settled_at", "run_dir", "source", "match", "family", "market", "selection",
+                    "odd", "verdict", "kickoff_date"]
+
+
+def _pool_legs_header(path: Path) -> list[str] | None:
+    """The header already on disk, or None for a file that does not exist yet."""
+    if not path.exists():
+        return None
+    for row in csv.reader(path.read_text(encoding="utf-8-sig").splitlines()):
+        return row
+    return None
+
+
+def migrate_pool_legs_kickoff_date(path: Path, kickoff_dates: dict[str, str]) -> int:
+    """One-time: add `kickoff_date` to a legacy pool log, back-filled from a match->date lookup.
+
+    Returns the number of rows migrated (0 if the file is already current, so re-running is safe).
+    A fixture missing from the lookup gets a BLANK date rather than a guessed one -- an unknown
+    date must read as unknown, since n_dates is a reported statistic. Only ever ADDS a column;
+    every existing value is preserved byte for byte.
+    """
+    header = _pool_legs_header(path)
+    if header is None or header == POOL_LEGS_HEADER:
+        return 0
+    if header != POOL_LEGS_HEADER[:-1]:
+        raise ValueError(f"unrecognised pool log header, refusing to migrate: {header}")
+    rows = list(csv.reader(path.read_text(encoding="utf-8-sig").splitlines()))[1:]
+    mcol = POOL_LEGS_HEADER.index("match")
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        w = csv.writer(fh)
+        w.writerow(POOL_LEGS_HEADER)
+        for row in rows:
+            w.writerow([*row, kickoff_dates.get(row[mcol], "")])
+    return len(rows)
+
+
+def append_backtest_pool_legs(path: Path, run_dir: str, records: list[dict],
+                              kickoff_dates: dict[str, str] | None = None) -> None:
     """Append full-gated-pool observations to their OWN log.
 
     CONTAMINATION GUARD -- a slipped leg is a BET; a pool leg is an OBSERVATION. Pooling them would
@@ -918,17 +955,28 @@ def append_backtest_pool_legs(path: Path, run_dir: str, records: list[dict]) -> 
     file from backtest_legs.csv, and (2) it carries a `source` column that the slip schema does NOT,
     so a naive concatenation yields mismatched headers and fails loudly instead of silently
     averaging bets together with observations.
+
+    Refuses to append to a legacy header. Writing 10-column rows under the old 9-column header
+    would shift every field left -- verdicts landing in `odd`, odds in `selection` -- while still
+    parsing as valid CSV. Silent corruption of the permanent record is the one failure worth
+    crashing over; run `migrate_pool_legs_kickoff_date` first.
     """
-    new = not path.exists()
+    header = _pool_legs_header(path)
+    if header is not None and header != POOL_LEGS_HEADER:
+        raise ValueError(
+            f"{path} predates the kickoff_date column ({len(header)} cols, expected "
+            f"{len(POOL_LEGS_HEADER)}). Appending would misalign every row -- run "
+            f"migrate_pool_legs_kickoff_date() first.")
+    dates = kickoff_dates or {}
     with path.open("a", newline="", encoding="utf-8-sig") as fh:
         w = csv.writer(fh)
-        if new:
-            w.writerow(["settled_at", "run_dir", "source", "match", "family",
-                        "market", "selection", "odd", "verdict"])
+        if header is None:
+            w.writerow(POOL_LEGS_HEADER)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for r in records:
-            w.writerow([now, run_dir, "pool", r["match"], r["family"],
-                        r["market"], r["selection"], f"{r['odd']:g}", r["verdict"]])
+            w.writerow([now, run_dir, "pool", r["match"], r["family"], r["market"],
+                        r["selection"], f"{r['odd']:g}", r["verdict"],
+                        dates.get(r["match"], "")])
 
 
 def tracker_lines(result: dict) -> list[str]:

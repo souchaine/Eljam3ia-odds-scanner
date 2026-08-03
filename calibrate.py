@@ -37,15 +37,20 @@ def calibrate(rows: list[dict]) -> dict[str, dict]:
     acc: dict[str, dict] = {}
     distinct: dict[str, set] = {}
     matches: dict[str, set] = {}
+    dates: dict[str, set] = {}
     for r in rows:
         fam = r.get("family", "") or "other"
         d = acc.setdefault(fam, {"n": 0, "graded": 0, "won": 0, "inv_sum": 0.0, "inv_n": 0})
         d["n"] += 1
         distinct.setdefault(fam, set()).add((r.get("match"), r.get("market"), r.get("selection")))
         matches.setdefault(fam, set())
+        dates.setdefault(fam, set())
         verdict = r.get("verdict")
         if verdict in ("won", "lost"):
             matches[fam].add(r.get("match"))     # matches contributing GRADED legs
+            day = (r.get("kickoff_date") or "").strip()
+            if day:                              # blank = unknown, NOT a distinct day
+                dates[fam].add(day)
             d["graded"] += 1
             if verdict == "won":
                 d["won"] += 1
@@ -69,8 +74,8 @@ def calibrate(rows: list[dict]) -> dict[str, dict]:
         # wins money long-run if roi > 0, which requires hit% ABOVE implied%, not a high hit%.
         roi = 100.0 * (d.get("ret_sum", 0.0) - inv_n) / inv_n if inv_n else None
         out[fam] = {"n": d["n"], "distinct": len(distinct[fam]), "matches": len(matches[fam]),
-                    "graded": graded, "won": d["won"], "hit_pct": hit, "implied_pct": implied,
-                    "gap": gap, "roi_pct": roi}
+                    "dates": len(dates[fam]), "graded": graded, "won": d["won"], "hit_pct": hit,
+                    "implied_pct": implied, "gap": gap, "roi_pct": roi}
     return out
 
 
@@ -111,8 +116,8 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
     print("Per-family calibration (hit% = won/graded; implied% = mean 1/odd over graded legs; "
           "gap = hit - implied, in pts; roi% = flat-stake profit per unit).")
     print("No blended aggregate: families differ in sample size and the gradeable subset is biased.\n")
-    print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'matches':>7} {'graded':>7} {'won':>5} "
-          f"{'hit%':>5} {'impl%':>6} {'gap':>6} {'roi%':>6}")
+    print(f"  {'family':<12} {'n':>5} {'distinct':>8} {'matches':>7} {'dates':>5} {'graded':>7} "
+          f"{'won':>5} {'hit%':>5} {'impl%':>6} {'gap':>6} {'roi%':>6}")
     few_legs = few_matches = 0
     # sort by number of graded legs (the calibration signal), then by n
     for fam in sorted(cal, key=lambda k: (-cal[k]["graded"], -cal[k]["n"])):
@@ -124,9 +129,9 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
             if c["matches"] < min_matches:
                 few_matches += 1
             hit = gap = roi = None               # sample cannot support a rate
-        print(f"  {fam:<12} {c['n']:>5} {c['distinct']:>8} {c['matches']:>7} {c['graded']:>7} "
-              f"{c['won']:>5} {_fmt_pct(hit)} {_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)} "
-              f"{_fmt_gap(roi)}")
+        print(f"  {fam:<12} {c['n']:>5} {c['distinct']:>8} {c['matches']:>7} "
+              f"{c.get('dates', 0):>5} {c['graded']:>7} {c['won']:>5} {_fmt_pct(hit)} "
+              f"{_fmt_pct(c['implied_pct']):>6} {_fmt_gap(gap)} {_fmt_gap(roi)}")
     if few_legs or few_matches:
         print(f"\n  hit%/gap withheld where the sample cannot support a rate "
               f"({few_legs} family/families under {min_n} graded legs, "
@@ -134,6 +139,11 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
         print("  Legs on the same fixture are CORRELATED -- they all resolve off one scoreline -- so "
               "the number of\n  distinct matches, not the number of legs, governs the error bars. "
               "(--min-n / --min-matches to change.)")
+    if any(c.get("dates", 0) for c in cal.values()):
+        print("\n  dates = distinct MATCH-DAYS contributing graded legs. Matches cluster inside "
+              "dates: on one\n  match-day, market-wide pricing conditions are shared. So the true "
+              "band is WIDER than the one\n  implied by `matches` alone — read every gap above as "
+              "less precise than its match count suggests.")
     total_graded = sum(c["graded"] for c in cal.values())
     if total_graded < 200:
         leg_word = "leg" if total_graded == 1 else "legs"

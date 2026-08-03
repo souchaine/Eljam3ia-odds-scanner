@@ -72,7 +72,10 @@ def test_pool_file_schema_is_incompatible_with_slip_file(tmp_path):
     append_backtest_pool_legs(p, "run_x", recs)
     rows = list(csv.reader(p.read_text(encoding="utf-8-sig").splitlines()))
     assert rows[0] == ["settled_at", "run_dir", "source", "match", "family",
-                       "market", "selection", "odd", "verdict"]
+                       "market", "selection", "odd", "verdict", "kickoff_date"]
+    assert "source" in rows[0] and "kickoff_date" in rows[0], (
+        "the guard is that these columns do NOT exist in the slip schema, so concatenating the "
+        "two files yields mismatched headers and fails loudly")
     assert all(r[2] == "pool" for r in rows[1:]), "every pool row self-identifies as an observation"
     assert len(rows) == len(recs) + 1
 
