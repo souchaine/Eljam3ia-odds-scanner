@@ -10,15 +10,26 @@ Supersedes `SESSION-HANDOFF-2026-07-29.md`. Read this first; then `.superpowers/
 ## 1. The one-line status
 
 **THE GOAL IS ACHIEVED (2026-08-01).** The project's stated goal — per-family hit% vs the odds'
-implied% (calibration) — produced its first REAL numbers: `run_20260731_0039` settled with 21/22
-fixtures scored, 99/100 slip legs graded (2 of 24 gradeable slips won), and **544 graded pool
-observations across 21 matches**. First per-family gaps (pool): or-combo +1, 1st half +6, main −6,
-2nd half −7, combo −4, both halves +3 (htft/multigoals withheld below the n-floor).
+implied% (calibration) — produces real numbers, and the loop now runs on demand.
 
-**Interpretation is binding: these gaps are NOT signal.** Legs are within-match correlated, so the
-effective sample is ~21 matches; at p≈0.72, n=21 the 95% band is roughly ±20pp — every gap sits
-inside noise. This is one data point plus proof the instrument works. The project's remaining work
-is purely mechanical: **accumulate slates** (each adds ~21 independent matches).
+**All measurements live in [`docs/CALIBRATION-LOG.md`](CALIBRATION-LOG.md) — read that for results,
+not this file.** Two slates settled: `run_20260731_0039` (21 matches, 544 graded pool observations)
+and `run_20260801_1007` (41 matches, 931 graded). **62 matches, 1,475 graded observations.**
+
+**Interpretation is binding: nothing is signal yet.** Legs are within-match correlated, so the
+effective sample is the MATCH count; at p≈0.72, n=62 the 95% band is ±11pp and every family's gap
+sits inside it. Slate 2's real contribution was a **falsification**: `1st half` (+6.4 → −6.0) and
+`or-combo` (+1.4 → −4.8) both changed sign, and the project's most attractive raw number ever —
+`htft` at +28 gap / +39 roi off 13 legs — went to −0.9. The withholding floors are what stopped +28
+being reported as a finding. `calibrate.py --by-run` now makes reversals a first-class output.
+
+**The stated goal "15/25 slips correct" is arithmetically unreachable with 4-leg slips** in the
+1.25–1.50 window (it needs 88% legs, which price at 1.14), and reaching it with 2-leg slips returns
+0.996 per unit — break-even by construction. Money comes only from a positive `gap`. The derivation
+is at the top of the calibration log.
+
+The remaining work is purely mechanical: **accumulate slates** (~41 matches each; 4–5 more brings
+the band to ±6.6pp, where a real 8–11pp margin becomes detectable).
 
 ## 2. What this session changed (headline)
 
@@ -98,8 +109,11 @@ the reusable blank. The repeatable daily loop is:
 ```
 py settle.py <run>/betslips_*_offline.txt --outcomes <run>/scores_<date>.csv --check
 py settle.py <run>/betslips_*_offline.txt --outcomes <run>/scores_<date>.csv --pool <run>/odds_matrix_*.csv
-py calibrate.py --legs output/backtest_pool_legs.csv
+py calibrate.py --legs output/backtest_pool_legs.csv --by-run
 ```
+4. **Append the slate to [`docs/CALIBRATION-LOG.md`](CALIBRATION-LOG.md)** — matches scored, matches
+   deleted (and why), and the new per-slate row. Append, never rewrite: the log's value is that a
+   reversed gap stays visible.
 
 Fill rules (unchanged): NEVER guess a score; no result published -> DELETE the row; FT without HT ->
 blank `ht_*` (half legs unsettleable, FT legs still grade). **Cup ties: check the event log for
@@ -166,6 +180,15 @@ any candidate source, which must reproduce BOTH FT and HT):
   contain old API keys. Delete once the keys are rotated: `rm ~/.bashrc.bak-*`.
 - `~/.bashrc` holds one working `export API_FOOTBALL_KEY=...` line (UTF-8). NOTE: PowerShell's
   `Add-Content` writes **UTF-16**, which bash cannot parse — always append from Git Bash.
+- `output/backtest.csv` was created before `pred_win_pct` was renamed, so its HEADER still reads
+  `pred_win_pct` while the code writes `pred_win_pct_floor` (header is only written for a NEW file).
+  Values are aligned and correct; cosmetic only. A fresh file picks up the right name.
+- `settle.py --pool` does NOT call `exclude_inplay()`. It doesn't need to: the graded set is bounded
+  by the scores CSV, and a slate is only settled for fixtures kicking off after the scrape. Verified
+  for slate 2 (scan ended 10:19Z, earliest scored kickoff 11:00Z). **If a scores CSV is ever filled
+  for a fixture that kicked off during the scan, this becomes a real contamination hole.**
+- Windows MAX_PATH: the session scratchpad path is >260 chars, so `py <script>` there fails with a
+  bogus "No such file or directory". Copy analysis scripts to a short temp path to run them.
 - Deferred, named: reconcile `make_betslips.market_category` (7 families) with
   `settle._market_family` (14); the ~30 score-derivable markets still in the `other` bucket
   (`Any team to win`, `1|2 win to nil`, `to win either half`) — deliberately NOT built, because the
