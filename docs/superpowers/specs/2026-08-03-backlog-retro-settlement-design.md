@@ -128,7 +128,32 @@ run columns, and retro rows stay visibly distinct from live slates.
    applied, plus `--by-run` reversal detection across the full history, and append to
    `docs/CALIBRATION-LOG.md`.
 
-## 8. Expected outcome
+## 8. Measured yield (added after the join, 2026-08-03)
+
+The design estimated 1,400–2,000 matches. **The measured figure is 611 (24.4% of 2,508).** Recorded
+here rather than quietly revised, because the gap changes what the load can answer.
+
+It is not a matching defect — it was probed. Whole competitions score zero hits because
+worldfootball does not carry them at all: U20 Paulista (49 fixtures), Regional Football Leagues
+(44), Kolmonen (35), Argentina Primera Nacional U20 (29), USL League Two (28), Primera C (28),
+China League 2 (24), Calcutta Premier Div. (23). This is the same conclusion the P2 provider work
+reached — the binding constraint is the backlog's COMPOSITION, not the source.
+
+Revised expectation: **62 → ~600 matches, a band of roughly ±3.6pp rather than ±2.2pp.** Enough to
+make a family's margin measurable; not enough to confirm a 3% edge.
+
+### Operational trap found during the fetch
+
+Fetching 611 reports at 8 concurrent workers gets throttled into **hollow pages** — HTTP 200 with
+the result elements absent. `errs` stayed 0 and 610 reports "succeeded", but 525 carried no score,
+which `validate_report` correctly reported as "not played". That is indistinguishable from a
+genuine coverage gap, and would have silently shrunk the load to 65 fixtures while looking like a
+finding about the data. Two paced workers with backoff return zero hollow pages.
+
+The lesson generalises: under concurrency this source degrades **silently and plausibly**, never
+into an error path. Any future bulk fetch needs a hollow-rate check, not just an error count.
+
+## 9. Expected outcome
 
 Stated in advance so it cannot be rationalised afterwards: **the most likely honest result is that
 every family converges near zero**, because eljam3ia prices these markets roughly correctly. That

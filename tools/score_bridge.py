@@ -73,7 +73,7 @@ class Handler(BaseHTTPRequestHandler):
         if not parts or len(parts) < 2:
             return self._send(403, b'{"error":"bad token"}')
         kind, key = parts[0], parts[1]
-        if kind not in ("index", "reports") or not SAFE_KEY.match(key):
+        if kind not in ("index", "reports", "verify") or not SAFE_KEY.match(key):
             return self._send(400, b'{"error":"bad target"}')
         try:
             n = int(self.headers.get("Content-Length") or 0)
