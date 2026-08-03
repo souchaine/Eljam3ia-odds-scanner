@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import csv
+import math
 import sys
 from pathlib import Path
 
@@ -151,6 +152,138 @@ def print_report(cal: dict[str, dict], min_n: int = DEFAULT_MIN_N,
               "accumulate several real settlements before drawing calibration conclusions.")
 
 
+# --- the pre-registered favourite-longshot test -------------------------------------------------
+# Fixed in docs/superpowers/specs/2026-08-03-odds-window-widening-design.md BEFORE any wide-window
+# data existed, and hard-coded here so the analysis cannot be re-cut until it passes. 1.01-1.20 is
+# COLLECTED but deliberately not analysed; re-analysing it later is an explicitly post-hoc test.
+BANDS = ((1.20, 1.30), (1.30, 1.40), (1.40, 1.50), (1.50, 1.75), (1.75, 2.00), (2.00, 2.50),
+         (2.50, 3.00))
+
+PREDICTION = ("Favourite-longshot bias predicts the margin is LOWEST at short odds and rises "
+              "toward longshots,\n  so roi% should DECLINE as odds lengthen.")
+
+
+def band_of(odd) -> str | None:
+    """The pre-registered band containing `odd`, or None if it falls outside them.
+
+    Half-open, low-inclusive, so a boundary price lands in exactly one band.
+    """
+    try:
+        value = float(odd)
+    except (TypeError, ValueError):
+        return None
+    for lo, hi in BANDS:
+        if lo <= value < hi:
+            return f"{lo:.2f}-{hi:.2f}"
+    return None
+
+
+def calibrate_by_band(rows: list[dict]) -> dict[str, dict]:
+    """Per-odds-band stats, using the same aggregation as the per-family report.
+
+    Every registered band appears even when empty -- a band with no data must read as `-`, never be
+    silently dropped, because a missing row is easy to mistake for a band that was never tested.
+    """
+    tagged = []
+    for r in rows:
+        b = band_of(r.get("odd"))
+        if b is not None:
+            tagged.append({**r, "family": b})
+    out = calibrate(tagged)
+    for band, cell in out.items():
+        cell["roi_band"] = _cluster_roi_band(
+            [r for r in tagged if r["family"] == band])
+    empty = {"n": 0, "distinct": 0, "matches": 0, "dates": 0, "graded": 0, "won": 0,
+             "hit_pct": None, "implied_pct": None, "gap": None, "roi_pct": None,
+             "roi_band": None}
+    for lo, hi in BANDS:
+        out.setdefault(f"{lo:.2f}-{hi:.2f}", dict(empty))
+    return out
+
+
+def _cluster_roi_band(rows: list[dict]) -> float | None:
+    """95% half-width on roi%, clustering on MATCH-DAY.
+
+    Legs cluster inside matches and matches cluster inside dates: on one match-day, market-wide
+    pricing conditions are shared. Treating legs as independent produces an interval far too narrow,
+    and too narrow is the dangerous direction -- it turns noise into a finding. Returns None with
+    fewer than two match-days, because a single day cannot bound its own variability.
+    """
+    days: dict[str, list[float]] = {}
+    for r in rows:
+        if r.get("verdict") not in ("won", "lost"):
+            continue
+        try:
+            odd = float(r.get("odd") or 0)
+        except (TypeError, ValueError):
+            continue
+        if odd <= 0:
+            continue
+        ret = odd if r["verdict"] == "won" else 0.0
+        days.setdefault((r.get("kickoff_date") or "").strip() or "?", []).append(ret - 1.0)
+    if len(days) < 2:
+        return None
+    vals = [(100 * sum(v) / len(v), len(v)) for v in days.values()]
+    total = sum(w for _, w in vals)
+    mean = sum(v * w for v, w in vals) / total
+    var = sum(w * (v - mean) ** 2 for v, w in vals) / total
+    return 1.96 * math.sqrt(var / (len(vals) - 1))
+
+
+def monotone_verdict(stats: dict[str, dict]) -> str:
+    """Apply the PRE-REGISTERED decision rule to per-band ROI intervals.
+
+    A positive finding requires BOTH a band whose interval sits entirely above zero AND the
+    predicted monotone shape, with the clearing band at the SHORT end. With 7 bands at 95%, a lone
+    clearing band is roughly what chance produces every third run -- so without the pattern it is
+    reported as an artifact, not an edge. This function exists so that rule cannot quietly soften.
+    """
+    order = [f"{lo:.2f}-{hi:.2f}" for lo, hi in BANDS]
+    live = [(b, stats[b]) for b in order
+            if b in stats and stats[b].get("roi_pct") is not None
+            and stats[b].get("roi_band") is not None]
+    if len(live) < 2:
+        return "insufficient"
+    clearing = [b for b, c in live if c["roi_pct"] - c["roi_band"] > 0]
+    if not clearing:
+        return "no edge"
+    # predicted shape: roi declines as odds lengthen, and the clearing band is the shortest tested
+    rois = [c["roi_pct"] for _, c in live]
+    declining = rois[0] == max(rois) and rois[-1] == min(rois)
+    return "predicted pattern" if (declining and clearing[0] == live[0][0]) else "artifact"
+
+
+def print_band_report(cal: dict[str, dict], min_n: int = None, min_matches: int = None) -> None:
+    """Per-band table, printed WITH the prediction and the artifact rule.
+
+    The rule sits next to the numbers on purpose: a tempting band is exactly when a reader stops
+    scrolling to find the caveat.
+    """
+    min_n = DEFAULT_MIN_N if min_n is None else min_n
+    min_matches = DEFAULT_MIN_MATCHES if min_matches is None else min_matches
+    print("Per-odds-band calibration — the PRE-REGISTERED favourite-longshot test.")
+    print(f"  {PREDICTION}\n")
+    print(f"  {'band':<12} {'n':>6} {'matches':>8} {'dates':>6} {'graded':>7} {'won':>5} "
+          f"{'hit%':>5} {'impl%':>6} {'gap':>6} {'roi%':>6}")
+    for lo, hi in BANDS:
+        b = f"{lo:.2f}-{hi:.2f}"
+        c = cal.get(b, {})
+        show = (c.get("gap") is not None and c.get("graded", 0) >= min_n
+                and c.get("matches", 0) >= min_matches)
+        print(f"  {b:<12} {c.get('n', 0):>6} {c.get('matches', 0):>8} {c.get('dates', 0):>6} "
+              f"{c.get('graded', 0):>7} {c.get('won', 0):>5} "
+              f"{_fmt_pct(c.get('hit_pct') if show else None)} "
+              f"{_fmt_pct(c.get('implied_pct')):>6} {_fmt_gap(c.get('gap') if show else None)} "
+              f"{_fmt_gap(c.get('roi_pct') if show else None)}")
+    print("\n  DECISION RULE (fixed before the data existed): a positive finding needs BOTH a band "
+          "whose\n  interval sits above zero AND the declining pattern, with the clearing band at "
+          "the SHORT end.\n  A lone clearing band without the pattern is a multiple-comparisons "
+          "ARTIFACT, not an edge —\n  with 7 bands at 95%, chance produces one about every third "
+          "run.")
+    print("  1.01-1.20 is collected but NOT analysed here; re-analysing it later is post-hoc.")
+    print(f"\n  VERDICT: {monotone_verdict(cal)}")
+
+
 NO_RUN = "(no run)"
 
 
@@ -247,6 +380,9 @@ def main() -> int:
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N, dest="min_n",
                     help=f"minimum graded legs before a family's hit%%/gap is reported "
                          f"(default {DEFAULT_MIN_N}); below it, counts show but the rate does not")
+    ap.add_argument("--by-band", action="store_true", dest="by_band",
+                    help="ALSO run the PRE-REGISTERED favourite-longshot test over the fixed odds "
+                         "bands, with the multiple-comparisons rule printed beside the numbers")
     ap.add_argument("--by-run", action="store_true", dest="by_run",
                     help="ALSO break the gaps out per slate and flag families whose sign reversed "
                          "-- the combined table averages a fluke and a nothing into a weak edge")
@@ -261,6 +397,10 @@ def main() -> int:
     if not rows:
         print(f"{legs} has no leg rows yet.")
         return 1
+    if args.by_band:
+        print_band_report(calibrate_by_band(rows), min_n=args.min_n,
+                          min_matches=args.min_matches)
+        print()
     if args.by_run:
         print_run_comparison(calibrate_by_run(rows), min_n=args.min_n, min_matches=args.min_matches)
         print()
