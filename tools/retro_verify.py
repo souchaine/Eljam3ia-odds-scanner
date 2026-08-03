@@ -100,7 +100,7 @@ def main() -> int:
     agree, disagree, missing = 0, [], 0
     for r in sample:
         m = ext.get(_key(r["match"]))
-        if not m or m.get("ft") is None:
+        if not m or m.get("h") is None or m.get("a") is None:
             missing += 1
             continue
         if [int(m["h"]), int(m["a"])] == [int(r["home"]), int(r["away"])]:
