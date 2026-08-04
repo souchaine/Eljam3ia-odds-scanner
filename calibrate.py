@@ -230,7 +230,19 @@ def _cluster_roi_band(rows: list[dict]) -> float | None:
     return 1.96 * math.sqrt(var / (len(vals) - 1))
 
 
-def monotone_verdict(stats: dict[str, dict]) -> str:
+DEFAULT_MIN_DATES = 5
+# Why a THIRD floor: the interval clusters on match-day, so match-days are its sample size. Floors
+# on legs and matches do not constrain it. Found live -- 2.00-2.50 printed -61.3% +/- 8.7 off two
+# match-days; the interval excludes zero and reads like a finding, but with one degree of freedom
+# between clusters it estimates nothing.
+
+
+def _band_reportable(c: dict, min_n: int, min_matches: int, min_dates: int) -> bool:
+    return (c.get("gap") is not None and c.get("graded", 0) >= min_n
+            and c.get("matches", 0) >= min_matches and c.get("dates", 0) >= min_dates)
+
+
+def monotone_verdict(stats: dict[str, dict], min_dates: int = DEFAULT_MIN_DATES) -> str:
     """Apply the PRE-REGISTERED decision rule to per-band ROI intervals.
 
     A positive finding requires BOTH a band whose interval sits entirely above zero AND the
@@ -241,7 +253,8 @@ def monotone_verdict(stats: dict[str, dict]) -> str:
     order = [f"{lo:.2f}-{hi:.2f}" for lo, hi in BANDS]
     live = [(b, stats[b]) for b in order
             if b in stats and stats[b].get("roi_pct") is not None
-            and stats[b].get("roi_band") is not None]
+            and stats[b].get("roi_band") is not None
+            and stats[b].get("dates", min_dates) >= min_dates]
     if len(live) < 2:
         return "insufficient"
     clearing = [b for b, c in live if c["roi_pct"] - c["roi_band"] > 0]
@@ -253,7 +266,8 @@ def monotone_verdict(stats: dict[str, dict]) -> str:
     return "predicted pattern" if (declining and clearing[0] == live[0][0]) else "artifact"
 
 
-def print_band_report(cal: dict[str, dict], min_n: int = None, min_matches: int = None) -> None:
+def print_band_report(cal: dict[str, dict], min_n: int = None, min_matches: int = None,
+                      min_dates: int = DEFAULT_MIN_DATES) -> None:
     """Per-band table, printed WITH the prediction and the artifact rule.
 
     The rule sits next to the numbers on purpose: a tempting band is exactly when a reader stops
@@ -268,9 +282,8 @@ def print_band_report(cal: dict[str, dict], min_n: int = None, min_matches: int 
     for lo, hi in BANDS:
         b = f"{lo:.2f}-{hi:.2f}"
         c = cal.get(b, {})
-        show = (c.get("gap") is not None and c.get("graded", 0) >= min_n
-                and c.get("matches", 0) >= min_matches)
-        print(f"  {b:<12} {c.get('n', 0):>6} {c.get('matches', 0):>8} {c.get('dates', 0):>6} "
+        show = _band_reportable(c, min_n, min_matches, min_dates)
+        print(f"  {b:<12} {c.get('n', 0):>6} {c.get('matches', 0):>8} {c.get('dates', 0):>5} "
               f"{c.get('graded', 0):>7} {c.get('won', 0):>5} "
               f"{_fmt_pct(c.get('hit_pct') if show else None)} "
               f"{_fmt_pct(c.get('implied_pct')):>6} {_fmt_gap(c.get('gap') if show else None)} "
@@ -281,7 +294,10 @@ def print_band_report(cal: dict[str, dict], min_n: int = None, min_matches: int 
           "ARTIFACT, not an edge —\n  with 7 bands at 95%, chance produces one about every third "
           "run.")
     print("  1.01-1.20 is collected but NOT analysed here; re-analysing it later is post-hoc.")
-    print(f"\n  VERDICT: {monotone_verdict(cal)}")
+    print(f"  A band is withheld below {min_n} graded legs, {min_matches} matches OR {min_dates} "
+          "MATCH-DAYS — the interval\n  clusters on match-day, so match-days are its sample size, "
+          "not legs.")
+    print(f"\n  VERDICT: {monotone_verdict(cal, min_dates)}")
 
 
 NO_RUN = "(no run)"

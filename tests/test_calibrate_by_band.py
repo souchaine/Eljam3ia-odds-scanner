@@ -136,6 +136,39 @@ def test_report_states_the_prediction_and_the_verdict(capsys):
     assert "artifact" in out, "the multiple-comparisons rule must be visible next to the numbers"
 
 
+def test_a_band_spanning_too_few_match_days_is_withheld(capsys):
+    """The interval CLUSTERS on match-day, so a band spanning two days cannot support one.
+
+    Found live: 2.00-2.50 printed -61.3% +/- 8.7 off two match-days. The interval excludes zero and
+    reads like a finding, but with one degree of freedom between clusters it is not an estimate of
+    anything. Floors on legs and matches did not catch it because they are not the statistic's
+    clustering level.
+    """
+    rows = ([_row(2.10, "lost", match=f"a{i}", date="2026-08-03") for i in range(30)]
+            + [_row(2.10, "lost", match=f"b{i}", date="2026-08-04") for i in range(30)])
+    print_band_report(calibrate_by_band(rows))
+    row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("2.00-2.50")][0]
+    assert " 60 " in row and " 2 " in row, "counts are facts and stay"
+    assert row.rstrip().endswith("-"), "the rate must be withheld at 2 match-days"
+
+
+def test_a_band_spanning_enough_match_days_reports(capsys):
+    rows = [_row(2.10, "won" if i % 3 else "lost", match=f"m{i}",
+                 date=f"2026-08-{3 + i % 6:02d}") for i in range(40)]
+    print_band_report(calibrate_by_band(rows))
+    row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("2.00-2.50")][0]
+    assert not row.rstrip().endswith("-")
+
+
+def test_verdict_ignores_bands_below_the_date_floor():
+    stats = _band_stats(**{"1.20-1.30": (-5.0, 2.0), "1.30-1.40": (-6.0, 2.0)})
+    stats["2.00-2.50"] = {"roi_pct": +40.0, "roi_band": 5.0, "dates": 2}
+    for b in ("1.20-1.30", "1.30-1.40"):
+        stats[b]["dates"] = 20
+    assert monotone_verdict(stats) == "no edge", (
+        "a 2-day band must not manufacture a finding")
+
+
 def test_report_withholds_a_rate_below_the_floors(capsys):
     print_band_report(calibrate_by_band([_row(1.25, "won", match=f"m{i}") for i in range(4)]))
     row = [l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("1.20-1.30")][0]
