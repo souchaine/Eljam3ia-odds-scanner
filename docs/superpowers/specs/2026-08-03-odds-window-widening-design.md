@@ -145,7 +145,29 @@ binding constraint is the **5-match floor and the number of match-days**, since 
 interval needs at least two days and is only meaningful across many. Expect useful intervals in
 weeks, not days — and only for fixtures worldfootball actually covers (~24% of the backlog).
 
-## 6. Out of scope
+## 6. The daily job (registered 2026-08-04)
+
+| | |
+|---|---|
+| task | `Eljam3ia Wide Odds Measurement` |
+| schedule | daily 08:00 local — deliberately an hour before the 09:00 betting job, so the two cannot collide whichever is enabled |
+| runs | `tools/wide_scan.cmd` (in the repo, so the command is reviewable in version control) |
+| log | `output/wide_scan.log`, overwritten each run; the durable artifacts are the per-run directories |
+
+Verified end to end by running the registered task, not just the command by hand:
+144 events, 7,973 qualifying cells, `window: 1.01 .. 3`, **`BETSLIPS: none`**. The no-minting
+property holds through the scheduled path.
+
+**`Eljam3ia Odds Pipeline` (the 09:00 betting job) was disabled by the user on 2026-08-04.** It last
+ran 2026-08-03 and mints nothing while disabled. Re-enable with
+`schtasks /Change /TN "Eljam3ia Odds Pipeline" /ENABLE`.
+
+Settlement is NOT scheduled and is not automated. It requires the browser score lookup, so it stays
+a deliberate, human-initiated step — which also means the wide scans accumulate unsettled until
+someone runs the loop. That is the same backlog dynamic this project has already had to dig itself
+out of once; see the retro-settlement spec.
+
+## 7. Out of scope
 
 - Any change to `run_all.py`, the cron, or slip building.
 - Minting booking codes or placing bets.
