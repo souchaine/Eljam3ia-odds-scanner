@@ -114,16 +114,67 @@ The only family positive in both live slates (+3.2, +2.1) reads **−3.6 / roi �
 matches**, and clears its band on the negative side. Per-slate it is negative in 8 of the 12 slates
 that qualify. The project's single edge candidate did not survive a 6× larger sample.
 
-Per-slate signs across every qualifying slate (`--by-run`):
+Per-slate signs across every qualifying slate (`--by-run`, as of 2026-08-04, 25 slates):
 
-| family | qualifying slates | gap > 0 | gap < 0 | history |
-|---|---|---|---|---|
-| 1st half | 16 | 5 | 11 | reversed |
-| or-combo | 15 | 3 | 12 | reversed |
-| main | 15 | 2 | 13 | reversed |
-| 2nd half | 14 | 3 | 11 | reversed |
-| combo | 12 | **0** | 12 | stable − |
-| both halves | 12 | 4 | 8 | reversed |
+| family | qualifying slates | gap > 0 | gap < 0 | median gap | history |
+|---|---|---|---|---|---|
+| 1st half | 17 | 5 | 12 | −1.8 | reversed |
+| or-combo | 16 | 3 | 13 | −3.8 | reversed |
+| main | 16 | 2 | 14 | −4.7 | reversed |
+| 2nd half | 15 | 3 | 12 | −5.2 | reversed |
+| combo | 13 | **0** | 13 | −5.3 | stable − |
+| both halves | 13 | 4 | 9 | −3.8 | reversed |
+| htft | 2 | **0** | 2 | −21.6 | stable − |
+
+Every family is negative in the majority of qualifying slates, and `combo` is negative in **all 13**
+that qualify. The median gap is negative for all seven. `both halves` — the former edge candidate —
+is negative in 9 of 13.
+
+## 2026-08-04 — incremental settle + the band test opens
+
+24 new fixtures verified and loaded (17/17 independent agreement, zero disagreements), 892
+observations, 27 stale `unsettleable` rows replaced. Pool now **9,793 graded / 505 matches /
+23 match-days**, **zero duplicate triples** across 15,228 rows.
+
+Small increment, so the per-family numbers barely moved. Two things did happen that matter.
+
+### The pre-registered band test has a baseline
+
+First reading of `calibrate.py --by-band`
+([pre-registration](superpowers/specs/2026-08-03-odds-window-widening-design.md)):
+
+| band | legs | matches | dates | gap | roi% |
+|---|---|---|---|---|---|
+| 1.20–1.30 | 1597 | 412 | 21 | −6 | −7 |
+| 1.30–1.40 | 2969 | 459 | 23 | −4 | −5 |
+| 1.40–1.50 | 3484 | 485 | 23 | −6 | −8 |
+| 1.50–1.75 | 1349 | 413 | 21 | −5 | −7 |
+| 1.75–2.00 | 44 | 15 | **2** | *withheld* | *withheld* |
+| 2.00–2.50 | 87 | 21 | **2** | *withheld* | *withheld* |
+| 2.50–3.00 | 78 | 20 | **2** | *withheld* | *withheld* |
+
+**VERDICT: no edge.** Four bands report, all −5% to −8%, flat. No sign yet of the predicted
+decline, and nothing near zero.
+
+### A defect the long-odds data exposed
+
+Before the fix, `2.00–2.50` printed **−61.3% ± 8.7** off **two match-days**. That interval excludes
+zero and reads exactly like a finding — on the very day the wide-window test opened, it is the
+finding one would most want to believe.
+
+It was worthless. The interval **clusters on match-day**, so two days give one degree of freedom
+between clusters. The floors on legs (20) and matches (5) could not catch it because **neither is
+the statistic's clustering level** — the same class of defect as `sign_history` once requiring
+every slate to qualify. A statistic must be floored on its own sample size, not on a correlated one
+that happens to be larger.
+
+Fixed: `DEFAULT_MIN_DATES = 5`, applied to both the table and the verdict. Counts stay visible;
+only the rate is withheld.
+
+Worth recording honestly: the raw long-odds numbers **do** lean the direction favourite–longshot
+bias predicts (margin rising toward longshots). That direction means longshots are *worse*, not
+that favourites are profitable — and at two match-days it is not evidence of anything. The
+pre-registration is doing its job.
 
 ## Running table
 
