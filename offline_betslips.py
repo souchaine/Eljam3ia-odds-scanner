@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backlog import is_named_competition
-from make_betslips import build_settleable_slips
 from settle import _market_family, is_settleable, is_void_capable, read_odds_matrix
 
 # Measured 2026-08-04 over 9,793 graded observations / 505 matches: flat-stake return per leg,
@@ -64,19 +63,57 @@ def selections_from_matrix(text: str, lo: float, hi: float, now=None) -> list[di
     return out
 
 
+def build_slips(sels: list[dict], legs: int, slips: int, rng: random.Random) -> list[list[dict]]:
+    """Slips of `legs` legs, each on a DISTINCT MATCH, spreading families as far as they go.
+
+    Distinct MATCH is the correctness rule and is absolute: two legs on one fixture resolve off the
+    same scoreline, so their outcomes are correlated and the printed combined odds would overstate
+    the true win probability. Never relaxed, at any length.
+
+    Distinct FAMILY is diversification, not correctness, so it yields once exhausted. Only ~7
+    families exist in a typical slate, and the live builder's one-family-per-leg rule therefore caps
+    a slip at 7 legs; a longer slip has to reuse them. Diversity is spent before it is reused — no
+    family repeats while an unused one remains — so a 10-leg slip still covers every family once
+    before doubling up.
+
+    Only COMPLETE slips are emitted. A slate with fewer distinct fixtures than `legs` yields
+    nothing rather than a short slip.
+    """
+    if legs <= 0 or slips <= 0:
+        return []
+    remaining = [s for s in sels if is_settleable(s.get("market_name"), s.get("label"))]
+    out: list[list[dict]] = []
+    while len(out) < slips:
+        rng.shuffle(remaining)
+        slip: list[dict] = []
+        used_matches: set = set()
+        used_families: set = set()
+        for require_new_family in (True, False):
+            for s in remaining:
+                if len(slip) == legs:
+                    break
+                if s["match"] in used_matches:
+                    continue
+                if require_new_family and s["family"] in used_families:
+                    continue
+                slip.append(s)
+                used_matches.add(s["match"])
+                used_families.add(s["family"])
+            if len(slip) == legs:
+                break
+        if len(slip) < legs:
+            break                                  # cannot complete -> stop; never emit a partial
+        chosen = {id(s) for s in slip}
+        remaining = [s for s in remaining if id(s) not in chosen]
+        out.append(slip)
+    return out
+
+
 def build_from_matrix(text: str, legs: int, slips: int, lo: float, hi: float,
                       now=None, seed: int = 0) -> list[list[dict]]:
-    """Slips from a matrix, using the SAME builder the live pipeline uses.
-
-    Reusing `build_settleable_slips` rather than re-implementing it keeps the distinct-match and
-    distinct-family guarantees identical to every slip already in the backtest, so today's file is
-    comparable to the history rather than a lookalike.
-    """
-    sels = selections_from_matrix(text, lo, hi, now)
-    pools: dict[str, list[dict]] = {}
-    for s in sels:
-        pools.setdefault(s["family"], []).append(s)
-    return build_settleable_slips(pools, legs, slips, random.Random(seed))
+    """Slips from a scanned matrix. Gate-eligible, pre-match, priced inside [lo, hi]."""
+    return build_slips(selections_from_matrix(text, lo, hi, now), legs, slips,
+                       random.Random(seed))
 
 
 def render(slips: list[list[dict]], legs: int, lo: float, hi: float, seed: int) -> str:
@@ -101,7 +138,10 @@ def render(slips: list[list[dict]], legs: int, lo: float, hi: float, seed: int) 
         combined = 1.0
         for s in slip:
             combined *= s["price"]
-        fams = ", ".join(sorted({s["family"] for s in slip}))
+        counts: dict[str, int] = {}
+        for s in slip:
+            counts[s["family"]] = counts.get(s["family"], 0) + 1
+        fams = ", ".join(f"{f}x{n}" if n > 1 else f for f, n in sorted(counts.items()))
         pushable = sum(1 for s in slip if is_void_capable(s["market_name"], s["label"]))
         extra = f", {pushable} push-capable leg{'s' if pushable != 1 else ''}" if pushable else ""
         out.append(f"BETSLIP {i}  ({len(slip)} legs, combined odds x{combined:.2f}, "
@@ -124,7 +164,9 @@ def main() -> int:
                     help="matrix CSV; defaults to the newest odds_matrix_*.csv under --output")
     ap.add_argument("--output", default="output")
     ap.add_argument("--out", default=None, help="where to write; defaults beside the matrix")
-    ap.add_argument("--legs", type=int, default=4)
+    ap.add_argument("--legs", type=int, default=12,
+                    help="legs per slip (default 12). Only ~7 families exist in a slate, so beyond "
+                         "7 legs families repeat; distinct MATCH per leg is never relaxed")
     ap.add_argument("--slips", type=int, default=25)
     ap.add_argument("--window", default="1.25..1.50",
                     help="odds range for the LEGS (the scan may be wider); keeping the historical "
