@@ -125,6 +125,70 @@ def worklist_by_date(selections: list[dict], already_scored: set,
 
 GRADED_VERDICTS = ("won", "lost", "void")
 
+# A rejection is remembered only when re-fetching CANNOT change it. Everything here is a property
+# of what the SOURCE published: a shootout, an absent goal timeline, or a self-contradictory report
+# reads the same tomorrow. "not fetched" and "not played" are deliberately absent -- a throttled
+# request returns a page with no result, which validates as "not played", and caching that would
+# permanently discard a real fixture because of one bad request.
+_PERMANENT = ("penalty shootout", "no goal events", "disagrees with goal minutes",
+              "disagrees with", "never inferred from full-time", "goals do not un-score",
+              "goal minutes unparseable")
+_TRANSIENT = ("not fetched", "not played", "no result published")
+
+REJECTIONS_FILE = "rejected.csv"
+
+
+def is_permanent_rejection(reason: str) -> bool:
+    """Will re-fetching this fixture produce a different answer? If it might, do not cache it."""
+    text = (reason or "").lower()
+    if any(t in text for t in _TRANSIENT):
+        return False
+    return any(p in text for p in _PERMANENT)
+
+
+def read_rejections(rejected_dir) -> set:
+    """Fixtures whose rejection is permanent, so the worklist can stop re-fetching them."""
+    path = Path(rejected_dir) / REJECTIONS_FILE
+    if not path.exists():
+        return set()
+    return {r["match"] for r in csv.DictReader(path.read_text(encoding="utf-8-sig").splitlines())
+            if r.get("match")}
+
+
+def write_rejections(rejected_dir, rejections: dict, succeeded: set | None = None) -> int:
+    """Merge this run's PERMANENT rejections into the list; drop any fixture since scored.
+
+    `succeeded` exists because a rejection is a statement about one attempt, not a verdict on the
+    fixture: if a later run manages to verify it, it must leave the list rather than sit there
+    suppressing a fixture that now works.
+    """
+    out = Path(rejected_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    keep = {m: "" for m in read_rejections(out)}
+    for match, reason in (rejections or {}).items():
+        if is_permanent_rejection(reason):
+            keep[match] = reason
+    for match in (succeeded or set()):
+        keep.pop(match, None)
+    with (out / REJECTIONS_FILE).open("w", newline="", encoding="utf-8-sig") as fh:
+        w = csv.writer(fh)
+        w.writerow(["match", "reason"])
+        for match, reason in sorted(keep.items()):
+            w.writerow([match, reason])
+    return len(keep)
+
+
+def handled_fixtures(cache_dir, rejected_dir) -> set:
+    """Fixtures the loop should not look up again: already scored, or permanently rejected."""
+    scored = set()
+    cache = Path(cache_dir)
+    if cache.exists():
+        for f in cache.glob("*.csv"):
+            for row in csv.DictReader(f.read_text(encoding="utf-8-sig").splitlines()):
+                if row.get("match"):
+                    scored.add(row["match"])
+    return scored | read_rejections(rejected_dir)
+
 
 def already_loaded_triples(pool_path) -> dict[tuple, str]:
     """(match, market, selection) -> verdict, for everything already in the pool log.
@@ -238,6 +302,8 @@ def main() -> int:
     ap.add_argument("--output", default="output", help="root holding the run_* directories")
     ap.add_argument("--scores-cache", default="output/scores_cache", dest="cache",
                     help="per-date verified results; a cached fixture is never re-fetched")
+    ap.add_argument("--rejected", default="output/scores_rejected",
+                    help="permanently-rejected fixtures, skipped instead of re-fetched")
     ap.add_argument("--worklist", default=None,
                     help="print the fixtures still needing a score for this date (YYYY-MM-DD)")
     ap.add_argument("--pool", default="output/backtest_pool_legs.csv",
@@ -252,13 +318,8 @@ def main() -> int:
     raw = len(sels)
     loaded = already_loaded_triples(args.pool)
     sels = exclude_already_loaded(sels, loaded)
-    scored = set()
     cache = Path(args.cache)
-    if cache.exists():
-        for f in cache.glob("*.csv"):
-            for row in csv.DictReader(f.read_text(encoding="utf-8-sig").splitlines()):
-                if row.get("match"):
-                    scored.add(row["match"])
+    scored = handled_fixtures(cache, args.rejected)
     wl = worklist_by_date(sels, scored, finished_before=args.finished_before)
 
     if args.worklist:
@@ -268,7 +329,8 @@ def main() -> int:
 
     print(f"backlog: {raw} distinct triples after dedupe; {raw - len(sels)} already MEASURED in "
           f"{args.pool} -> {len(sels)} to load, across {len({s['match'] for s in sels})} fixtures")
-    print(f"already scored: {len(scored)} fixture(s) in {cache}")
+    print(f"already handled: {len(scored)} fixture(s) — scored in {cache}, or permanently "
+          f"rejected in {args.rejected}")
     print(f"\n{'date':<14}{'fixtures still needed':>22}")
     for day, names in wl.items():
         print(f"  {day:<12}{len(names):>20}")

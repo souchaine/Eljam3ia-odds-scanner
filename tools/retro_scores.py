@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from backlog import is_permanent_rejection, write_rejections  # noqa: E402
 from scores import validate_report  # noqa: E402
 
 
@@ -29,6 +30,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--staging", default="output/.retro_staging")
     ap.add_argument("--cache", default="output/scores_cache")
+    ap.add_argument("--rejected", default="output/scores_rejected",
+                    help="where PERMANENT rejections are remembered so the worklist stops "
+                         "re-fetching them every run")
     ap.add_argument("--write", action="store_true",
                     help="write the CSVs; without it, validate and report only")
     args = ap.parse_args()
@@ -83,6 +87,11 @@ def main() -> int:
                     w.writerow([r["match"], r["home"], r["away"], r["ht_home"], r["ht_away"],
                                 r["join"], r["comp"], r["ma"]])
         print(f"\nwrote {len(by_date)} date file(s) to {cache}")
+        scored_now = {r["match"] for rows in by_date.values() for r in rows}
+        total = write_rejections(args.rejected, dict(rejected), succeeded=scored_now)
+        permanent = sum(1 for _, why in rejected if is_permanent_rejection(why))
+        print(f"remembered {permanent} PERMANENT rejection(s) this run "
+              f"({total} on the list); the rest are transient and will be retried")
     else:
         print("\n(dry run — pass --write to persist the cache)")
 
