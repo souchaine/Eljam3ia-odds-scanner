@@ -111,6 +111,12 @@ needs the browser score lookup, which cannot run unattended.
   result elements MISSING. `errs` stays 0 and the rows validate as "not played" — indistinguishable
   from a genuine coverage gap. It shrank a 611-fixture load to 65 while looking like a finding.
   **2 paced workers with backoff return zero hollow pages.** Check a hollow RATE, not an error count.
+  - **Refinement (2026-08-05): "hollow" and "no result" are DIFFERENT, and the retry loop conflates
+    them.** A page whose `.match-result-0` is absent is hollow → retry. A page that serves fine
+    (40KB, correct title) and shows `-:-`, often with `resch.`, is a **rescheduled or unplayed
+    fixture** → definitive, retrying is pure waste (3 requests and ~4s each). A run that opens on
+    several rescheduled fixtures shows a 100% "hollow" rate and looks like throttling; it settled to
+    8/46 once past them. Distinguish on the ELEMENT's presence, not on whether the score parses.
 - **Penalty shootouts.** 13 in one load. The headline score is not the match result.
 - **Coverage, not matching, is the constraint.** worldfootball carries ~24% of this backlog; whole
   competitions score zero (U20 Paulista, Kolmonen, Primera C, USL League Two, China League 2).
