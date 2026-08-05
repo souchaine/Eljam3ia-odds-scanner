@@ -125,8 +125,13 @@ needs the browser score lookup, which cannot run unattended.
 
 ## 7. Known, deliberately not fixed
 
-- **Rejected fixtures are re-fetched every run.** Rejections are not cached, so the ~178 fixtures
-  that failed validation reappear in every worklist. Wasteful and grows; harmless to correctness.
+- ~~Rejected fixtures are re-fetched every run.~~ **FIXED 2026-08-04.** Permanent rejections are
+  remembered in `output/scores_rejected/rejected.csv` and skipped by the worklist: the fetch list
+  went from 212 to **9**. A rejection is cached only when re-fetching cannot change it (shootout,
+  absent goal timeline, self-contradictory report). `not fetched` and `not played` are deliberately
+  treated as TRANSIENT — a throttled request returns a page with no result that validates as "not
+  played", and caching that would permanently discard a real fixture over one bad request. A
+  fixture that later verifies is dropped from the list.
 - `output/backtest.csv` header still reads `pred_win_pct` (legacy); the code writes
   `pred_win_pct_floor`. Values aligned; cosmetic.
 - `settle.py --pool` does not call `exclude_inplay()` — the graded set is bounded by the scores

@@ -17,7 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backlog import (already_loaded_triples, backlog_selections, canonical_kickoffs,  # noqa: E402
-                     dedupe_selections, exclude_already_loaded, worklist_by_date)
+                     dedupe_selections, exclude_already_loaded, handled_fixtures,
+                     worklist_by_date)
 from scores import Fixture, match_fixtures  # noqa: E402
 
 
@@ -42,6 +43,8 @@ def main() -> int:
     ap.add_argument("--staging", default="output/.retro_staging")
     ap.add_argument("--pool", default="output/backtest_pool_legs.csv")
     ap.add_argument("--cache", default="output/scores_cache")
+    ap.add_argument("--rejected", default="output/scores_rejected",
+                    help="permanently-rejected fixtures, skipped instead of re-fetched")
     ap.add_argument("--finished-before", default="2026-08-03T06:00:00Z", dest="finished_before")
     args = ap.parse_args()
 
@@ -49,14 +52,7 @@ def main() -> int:
     sels = exclude_already_loaded(dedupe_selections(backlog_selections(args.output)),
                                   already_loaded_triples(args.pool))
     days = canonical_kickoffs(sels)
-    scored = set()
-    cache = Path(args.cache)
-    if cache.exists():
-        import csv
-        for f in cache.glob("*.csv"):
-            for row in csv.DictReader(f.read_text(encoding="utf-8-sig").splitlines()):
-                if row.get("match"):
-                    scored.add(row["match"])
+    scored = handled_fixtures(args.cache, args.rejected)
     wl = worklist_by_date(sels, scored, finished_before=args.finished_before)
 
     fetch, per_day, comps = [], [], Counter()
