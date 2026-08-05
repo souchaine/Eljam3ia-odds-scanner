@@ -141,6 +141,13 @@ needs the browser score lookup, which cannot run unattended.
   them would add ~33% more matches with HT uncorroborated. Strict rule kept; reversing it is a
   user decision.
 - `market_category` (7 families) vs `_market_family` (14) still unreconciled.
+- **A closed grader audit is not possible on the current data**, and this is the highest-value
+  remaining addition. Complements (`Yes`/`No`) and monotonicity chains (`Over 1.5` vs `Over 2.5`)
+  would prove the grader correct without any external truth — but the odds window admits only ONE
+  side of any market, so the pool holds **0 complement pairs and 1 monotonicity pair**. A small
+  bounded scan mode that captures EVERY selection of a few markets on a handful of matches,
+  ignoring the odds filter, would close it. See the audit section in `CALIBRATION-LOG.md`; the
+  current evidence (hit% tracking implied% in a clean parallel shift) is strong but indirect.
 
 ## 8. Housekeeping
 

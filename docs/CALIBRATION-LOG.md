@@ -176,6 +176,48 @@ bias predicts (margin rising toward longshots). That direction means longshots a
 that favourites are profitable — and at two match-days it is not evidence of anything. The
 pre-registration is doing its job.
 
+## 2026-08-04 — grader audit: does the −6.6% survive scrutiny?
+
+The conclusion is now driving a real decision (the betting cron was disabled on the strength of
+it). If the grader systematically returned `lost` more often than it should, the result would be an
+artifact and the project would have proven something false. So it was attacked directly.
+
+### Two structural tests that CANNOT run here — and why that matters
+
+- **Complements.** On one match and market, `Yes`/`No` must have exactly one winner. **0 pairs
+  exist in the pool.** The odds window admits only ONE side of any market: if one side prices at
+  1.30, its complement sits near 4.0, outside the window.
+- **Monotonicity.** `Over 2.5` won ⇒ `Over 1.5` won. **1 pair exists.** Same cause.
+
+Both are the tests one would most want, and the odds window structurally prevents them. That is a
+real limitation on what this dataset can self-check, and it is recorded rather than glossed.
+
+### The test that does run, and passes convincingly
+
+Does the book's implied probability track the observed hit rate?
+
+| implied | legs | hit% | impl% | gap |
+|---|---|---|---|---|
+| 0.65 | 3134 | 62.2 | 67.8 | −5.6 |
+| 0.70 | 3031 | 68.0 | 72.1 | −4.1 |
+| 0.75 | 2529 | 71.6 | 76.8 | −5.2 |
+| 0.80 | 646 | 76.9 | 80.1 | −3.2 |
+
+**hit% tracks implied% across the whole range** — monotone, near-parallel, offset by a roughly
+constant 3–6pp. A grader that leaned toward `lost` could not produce this: the relationship would
+be flat, noisy, or diverging, not a clean parallel shift. And 4–6pp per leg is the ordinary margin
+for football markets, not an anomaly that would signal a bug.
+
+**Verdict: the measurement is sound and the −6.6% stands.** The evidence is strong but indirect —
+it rests on the tracking relationship rather than on a closed logical test.
+
+### The cheap way to close the gap (not built)
+
+A grader audit does not need the betting window. Scanning **every selection of a few markets** on a
+handful of matches — ignoring the odds filter entirely — would populate complements and
+monotonicity chains and turn this indirect argument into a closed one. That is a small, bounded
+scan mode and the single highest-value thing that could still be added to the instrument.
+
 ## Running table
 
 `gap` = hit% − implied% (points). `roi` = flat-stake profit per unit. `m` = distinct matches.
