@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backlog import is_named_competition
+from make_betslips import build_settleable_slips
 from settle import _market_family, is_settleable, is_void_capable, read_odds_matrix
 
 # Measured 2026-08-04 over 9,793 graded observations / 505 matches: flat-stake return per leg,
@@ -64,49 +65,16 @@ def selections_from_matrix(text: str, lo: float, hi: float, now=None) -> list[di
 
 
 def build_slips(sels: list[dict], legs: int, slips: int, rng: random.Random) -> list[list[dict]]:
-    """Slips of `legs` legs, each on a DISTINCT MATCH, spreading families as far as they go.
+    """Slips of `legs` legs, using the SAME builder the live betting path uses.
 
-    Distinct MATCH is the correctness rule and is absolute: two legs on one fixture resolve off the
-    same scoreline, so their outcomes are correlated and the printed combined odds would overstate
-    the true win probability. Never relaxed, at any length.
-
-    Distinct FAMILY is diversification, not correctness, so it yields once exhausted. Only ~7
-    families exist in a typical slate, and the live builder's one-family-per-leg rule therefore caps
-    a slip at 7 legs; a longer slip has to reuse them. Diversity is spent before it is reused — no
-    family repeats while an unused one remains — so a 10-leg slip still covers every family once
-    before doubling up.
-
-    Only COMPLETE slips are emitted. A slate with fewer distinct fixtures than `legs` yields
-    nothing rather than a short slip.
+    Sharing `build_settleable_slips` rather than keeping a parallel copy is deliberate: a second
+    implementation would drift, and the rule it encodes — distinct MATCH always, distinct FAMILY
+    only while families remain — is the one that decides whether the printed win% is true.
     """
-    if legs <= 0 or slips <= 0:
-        return []
-    remaining = [s for s in sels if is_settleable(s.get("market_name"), s.get("label"))]
-    out: list[list[dict]] = []
-    while len(out) < slips:
-        rng.shuffle(remaining)
-        slip: list[dict] = []
-        used_matches: set = set()
-        used_families: set = set()
-        for require_new_family in (True, False):
-            for s in remaining:
-                if len(slip) == legs:
-                    break
-                if s["match"] in used_matches:
-                    continue
-                if require_new_family and s["family"] in used_families:
-                    continue
-                slip.append(s)
-                used_matches.add(s["match"])
-                used_families.add(s["family"])
-            if len(slip) == legs:
-                break
-        if len(slip) < legs:
-            break                                  # cannot complete -> stop; never emit a partial
-        chosen = {id(s) for s in slip}
-        remaining = [s for s in remaining if id(s) not in chosen]
-        out.append(slip)
-    return out
+    pools: dict[str, list[dict]] = {}
+    for s in sels:
+        pools.setdefault(s["family"], []).append(s)
+    return build_settleable_slips(pools, legs, slips, rng, allow_family_repeat=True)
 
 
 def build_from_matrix(text: str, legs: int, slips: int, lo: float, hi: float,

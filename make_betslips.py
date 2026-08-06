@@ -196,7 +196,8 @@ def max_complete_slips(family_depths, legs: int) -> int:
 
 
 def build_settleable_slips(pools: dict[str, list[dict]], legs: int, max_slips: int,
-                           rng: random.Random) -> list[list[dict]]:
+                           rng: random.Random,
+                           allow_family_repeat: bool = False) -> list[list[dict]]:
     """Random, without-replacement builder for settleable slips.
 
     Each slip has exactly `legs` legs, each on a DISTINCT match and a DISTINCT settle family.
@@ -218,15 +219,28 @@ def build_settleable_slips(pools: dict[str, list[dict]], legs: int, max_slips: i
         slip: list[dict] = []
         used_matches: set = set()
         used_families: set = set()
-        for s in remaining:
+        # Pass 1 keeps one family per leg -- the DEFAULT, and the approved contract for the live
+        # 4-leg slips. Pass 2 runs only when `allow_family_repeat` is set, because a typical slate
+        # carries ~7 families and a 12-leg slip cannot be built any other way. It is opt-in rather
+        # than automatic: making it the default silently turned a 2-slip starved slate into 6.
+        #
+        # DISTINCT MATCH is never relaxed in either pass. Two legs on one fixture resolve off the
+        # same scoreline, so their outcomes are correlated and the combined odds would overstate the
+        # true win probability -- the printed win% would be a lie, not merely less diversified.
+        for require_new_family in ((True,) if not allow_family_repeat else (True, False)):
+            for s in remaining:
+                if len(slip) == legs:
+                    break
+                fam = _market_family(s.get("market_name"))
+                if s.get("match") in used_matches:
+                    continue
+                if require_new_family and fam in used_families:
+                    continue
+                slip.append(s)
+                used_matches.add(s.get("match"))
+                used_families.add(fam)
             if len(slip) == legs:
                 break
-            fam = _market_family(s.get("market_name"))
-            if s.get("match") in used_matches or fam in used_families:
-                continue
-            slip.append(s)
-            used_matches.add(s.get("match"))
-            used_families.add(fam)
         if len(slip) < legs:
             break                                 # cannot complete -> stop; never emit a partial
         chosen = {id(s) for s in slip}
@@ -442,8 +456,20 @@ def main() -> int:
                 for i, slip in enumerate(build_slips(cat_pools, args.legs, slips_b), 1):
                     groups.append((f"{cat} #{i}", slip))
         else:
+            # A slate carries ~8 SETTLEABLE families, so one-family-per-leg caps a slip at ~8.
+            # Beyond that the only way to build is to let families repeat; below it the flag
+            # changes nothing, since pass 2 never runs while pass 1 can still fill the slip.
+            #
+            # Count families among SETTLEABLE selections only. `pools` also holds corners, cards and
+            # player markets, which push the raw family count to ~14 — enough to make `12 > count`
+            # false and silently disable the fallback, producing zero slips from a 4,058-selection
+            # pool.
+            family_count = len({_market_family(s["market_name"])
+                                for sels in pools.values() for s in sels
+                                if is_settleable(s.get("market_name"), s.get("label"))})
             for i, slip in enumerate(
-                    build_settleable_slips(pools, args.legs, slips_b, rng), 1):
+                    build_settleable_slips(pools, args.legs, slips_b, rng,
+                                           allow_family_repeat=args.legs > family_count), 1):
                 groups.append((f"B{i}", slip))
 
         gated = [s for sels in pools.values() for s in sels
@@ -451,7 +477,16 @@ def main() -> int:
         win_pct = expected_win_pct(gated, args.legs)
         if not args.per_category:
             depths = Counter(_market_family(s["market_name"]) for s in gated)
-            ceiling = max_complete_slips(depths.values(), args.legs)
+            # max_complete_slips assumes one family per leg. Once families may repeat that formula
+            # returns 0 for any slip longer than the family count, which would contradict the slips
+            # actually built -- the binding constraint becomes DISTINCT MATCHES per slip instead.
+            if args.legs > len(depths):
+                matches_available = len({s["match"] for sels in pools.values() for s in sels
+                                         if is_settleable(s.get("market_name"), s.get("label"))})
+                ceiling = min(sum(depths.values()) // args.legs,
+                              matches_available // 1 if args.legs <= matches_available else 0)
+            else:
+                ceiling = max_complete_slips(depths.values(), args.legs)
             total = sum(depths.values())
             print(f"\nGated pool: {total}/{sum(len(v) for v in pools.values())} selections settleable"
                   f" across {len(depths)} families; avg odd "
