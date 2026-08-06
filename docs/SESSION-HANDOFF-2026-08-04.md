@@ -35,10 +35,23 @@ There is no leg selection in 1.25–1.50 on this book that makes the slips profi
 
 ## 2. What is running now
 
-| task | schedule | state | mints codes? |
+| task | schedule | runs | mints codes? |
 |---|---|---|---|
-| `Eljam3ia Wide Odds Measurement` | daily **08:00** | Ready | **No** — `--skip-betslips` |
-| `Eljam3ia Odds Pipeline` (betting) | daily 09:00 | **Disabled** 2026-08-04 | would, if enabled |
+| `Eljam3ia Wide Odds Measurement` | daily **08:00** | `tools/wide_scan.cmd` | **No** — `--skip-betslips` |
+| `Eljam3ia Odds Pipeline` (betting) | daily **09:00** | `tools/betting_scan.cmd` | **YES — 25 codes, 12 legs** |
+
+**The betting job was re-enabled 2026-08-06 at the user's request**, repointed at
+`tools/betting_scan.cmd` with `--legs 12 --slips 25`. It is the ONLY scheduled job that touches the
+bookmaker account. A booking code is a RESERVATION, not a stake — nothing is charged until a code
+is loaded and confirmed by hand in the BETSLIP panel — but the codes are real and appear on the
+account. Verified by running the registered task: 25 codes at ×41–59, win% 1.7–2.4.
+
+Stop it with `schtasks /Change /TN "Eljam3ia Odds Pipeline" /DISABLE`.
+
+**What the measurement says about those slips, recorded beside the fact that they are minted:**
+−6.6% per leg over 10,202 graded observations compounds to roughly **−56% per unit** on a 12-fold.
+Longer slips do not improve the position; they concentrate it into a rarer, larger, worse-priced
+payout. That is arithmetic from this project's own data, not an opinion.
 
 The wide job runs [`tools/wide_scan.cmd`](../tools/wide_scan.cmd) over **1.01–3.00**, feeding the
 pre-registered favourite–longshot test. `--skip-betslips` is load-bearing: `--target` is forwarded
