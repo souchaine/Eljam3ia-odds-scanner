@@ -290,9 +290,36 @@ def preamble_lines(*, legs: int, seed: int, lo: float, hi: float, matches: int,
         "leg is DROPPED at settlement, shortening the slip, so this is a floor, not an exact rate.",
         "Every leg is settleable from a scores CSV: match,home,away,ht_home,ht_away "
         "(half-time scores required).",
-        "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code (before kickoff).",
+        "Load a code on eljam3ia.com: BETSLIP panel -> Enter Booking Code.",
+        "EXPIRY: a code dies at its FIRST kickoff, shown per slip below. Past that the widget drops "
+        "the started legs and loads a short slip or nothing AT ALL, with no error -- the "
+        "reservation still resolves, the football is simply over. Slips are ordered "
+        "longest-lived first.",
         "",
     ]
+
+
+def slip_expiry(slip: list[dict]) -> str | None:
+    """When this booking code dies: the EARLIEST kickoff among its legs.
+
+    A reservation stays resolvable long after it is useless -- `FindReservedBet` happily returns a
+    12-leg slip whose every fixture finished yesterday, and the widget then loads nothing. The code
+    does not expire as a whole; it rots from the first kickoff onward. Legs with no recorded start
+    are ignored rather than treated as immediate, so a missing field cannot fake an expiry.
+    """
+    starts = [s.get("event", {}).get("startDate") for s in slip]
+    starts = [t for t in starts if t]
+    return min(starts) if starts else None
+
+
+def sort_slips_by_expiry(slips: list[list[dict]]) -> list[list[dict]]:
+    """Longest-lived first, so the top of the file is the part still usable.
+
+    Slips with no kickoff data sort last: their usability cannot be established, so they should not
+    displace one that is provably still open. Stable, so equal expiries keep build order.
+    """
+    dated = sorted((s for s in slips if slip_expiry(s)), key=slip_expiry, reverse=True)
+    return dated + [s for s in slips if not slip_expiry(s)]
 
 
 def slip_header_line(label: str, slip: list[dict]) -> str:
@@ -304,8 +331,12 @@ def slip_header_line(label: str, slip: list[dict]) -> str:
     fams = ", ".join(sorted({_market_family(s["market_name"]) for s in slip}))
     pushable = sum(1 for s in slip if is_void_capable(s["market_name"], s["label"]))
     extra = f", {pushable} push-capable leg{'s' if pushable != 1 else ''}" if pushable else ""
+    exp = slip_expiry(slip)
+    # The code is dead from this moment on -- the widget silently drops started legs, so a slip
+    # loaded after its first kickoff comes back short or empty with no error.
+    when = f", expires {exp[:10]} {exp[11:16]}Z" if exp else ""
     return (f"BETSLIP {label}  ({len(slip)} legs, combined odds x{combined:.2f}, "
-            f"win% {slip_win_pct(slip):.3g}, families: {fams}{extra})")
+            f"win% {slip_win_pct(slip):.3g}{when}, families: {fams}{extra})")
 
 
 def leg_line(i: int, s: dict) -> str:
@@ -467,9 +498,10 @@ def main() -> int:
             family_count = len({_market_family(s["market_name"])
                                 for sels in pools.values() for s in sels
                                 if is_settleable(s.get("market_name"), s.get("label"))})
-            for i, slip in enumerate(
-                    build_settleable_slips(pools, args.legs, slips_b, rng,
-                                           allow_family_repeat=args.legs > family_count), 1):
+            built = build_settleable_slips(pools, args.legs, slips_b, rng,
+                                           allow_family_repeat=args.legs > family_count)
+            # Longest-lived first, so B1 is the slip with the most time left to load it.
+            for i, slip in enumerate(sort_slips_by_expiry(built), 1):
                 groups.append((f"B{i}", slip))
 
         gated = [s for sels in pools.values() for s in sels
