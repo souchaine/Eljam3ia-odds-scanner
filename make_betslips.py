@@ -39,7 +39,7 @@ import random
 import sys
 import time
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -299,6 +299,39 @@ def preamble_lines(*, legs: int, seed: int, lo: float, hi: float, matches: int,
     ]
 
 
+MIN_LEAD_MINUTES = 20
+# Why this exists: the scan walks every league and takes ~30 minutes, so a fixture that is
+# comfortably upcoming when scanned can have kicked off by the time its code is reserved. On
+# 2026-08-08 a run finishing at 12:14Z minted 7 codes (of 25) that expired at 12:00Z -- born dead.
+# reserveBet accepts them happily; the widget then loads nothing.
+
+
+def drop_starting_soon(pools: dict[str, list[dict]], now: str,
+                       lead_minutes: int = MIN_LEAD_MINUTES) -> dict[str, list[dict]]:
+    """Drop every event kicking off within `lead_minutes` of NOW, checked just before building.
+
+    A fixture whose start is unknown or unparseable is dropped too: it cannot be SHOWN to be in the
+    future, which is the same view `settle.exclude_inplay` takes of an unknown kickoff.
+    """
+    cutoff = _parse_iso(now)
+    if cutoff is None:
+        return dict(pools)
+    cutoff += timedelta(minutes=lead_minutes)
+    out = {}
+    for key, sels in pools.items():
+        starts = [_parse_iso(s.get("event", {}).get("startDate")) for s in sels]
+        if starts and all(t is not None and t >= cutoff for t in starts):
+            out[key] = sels
+    return out
+
+
+def _parse_iso(value):
+    try:
+        return datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def slip_expiry(slip: list[dict]) -> str | None:
     """When this booking code dies: the EARLIEST kickoff among its legs.
 
@@ -417,6 +450,10 @@ def main() -> int:
                         help="legs per betslip (default 4); the resulting per-slip win%% is printed")
     parser.add_argument("--slips", "--slips-b", dest="slips", type=int, default=SLIPS_B,
                         help="max slips to build (default 25)")
+    parser.add_argument("--min-lead", type=int, default=MIN_LEAD_MINUTES, dest="min_lead",
+                        help=f"drop fixtures kicking off within this many minutes (default "
+                             f"{MIN_LEAD_MINUTES}); the scan takes ~30 min, so without it codes "
+                             f"get minted for matches that have already started")
     parser.add_argument("--seed", type=int, default=None,
                         help="RNG seed for reproducible slips; the seed used is written to the "
                              "file header, so pass it back to regenerate that exact file")
@@ -477,6 +514,16 @@ def main() -> int:
                     usable += 1
                 time.sleep(DELAY_S + random.uniform(0, 0.3))
             print(f"{league_name}: {usable} events with qualifying selections")
+
+        # Re-check kickoffs HERE, not at scan time: the walk above takes ~30 minutes, so a fixture
+        # that was upcoming when scanned may already be running now. Codes for started fixtures
+        # reserve successfully and load nothing.
+        before = sum(len(v) for v in pools.values())
+        pools = drop_starting_soon(pools, datetime.now(timezone.utc).isoformat(), args.min_lead)
+        dropped = before - sum(len(v) for v in pools.values())
+        if dropped:
+            print(f"Dropped {dropped} selection(s) on fixtures kicking off within "
+                  f"{args.min_lead} min — their codes would be born dead.")
 
         groups: list[tuple[str, list[dict]]] = []
         if args.per_category:
